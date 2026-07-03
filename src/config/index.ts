@@ -32,6 +32,7 @@ export {
 export type { ProtectMeConfigMutation } from "./config-loader.ts";
 export {
   resolveBlockedAttemptLogPath,
+  resolveDefaultAgentDir,
   resolveGlobalConfigPath,
   resolveProjectConfigPath,
   resolveProtectMeConfigPaths,

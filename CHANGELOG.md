@@ -8,6 +8,7 @@
 - Replaced template runtime examples with a preparation-only extension entry point.
 - Added non-functional config, policy, logging, events, and UI registration shells.
 - Added ProtectMe config types, deterministic path helpers, and missing-config defaults.
+- Aligned ProtectMe config paths with Pi config-directory helpers, including the configured project directory name and custom global agent directory.
 - Implemented config JSON parsing, validation, merge order, allow-list normalization, and write-back helpers.
 - Implemented host normalization and allow-list matching helpers with warning metadata for ignored invalid entries.
 - Prevented public suffix and unintended single-label allow-list entries from authorizing arbitrary child domains.
@@ -20,7 +21,11 @@
 - Implemented blocked-attempt JSONL logging helpers with bounded, redacted command snippets.
 - Expanded blocked-attempt log redaction for URL credentials, sensitive query values, cookies, API keys, and auth flags.
 - Registered first-attempt `tool_call` blocking for disallowed bash network requests with logging and agent guidance.
+- Added `user_bash` guarding for Pi `!`/`!!` commands using the same supported request detection, prompts, logging, and fail-closed behavior.
+- Added focused Pi-context integration tests for lifecycle reload resets, project trust propagation, command mode gating, TUI custom UI contracts, RPC prompts, and guidance delivery.
+- Switched first-attempt guidance from follow-up user messages to non-displayed custom guidance messages so blocked calls do not queue unintended user-authored turns.
 - Added second-attempt ProtectMe prompts for allow-once, project/global allow-list writes, keep-blocked, and no-UI fail-closed outcomes.
+- Converted repeated-attempt prompt failures into explicit fail-closed ProtectMe block results with bounded `prompt_error` logs.
 - Verified `mode: "allow"` bypass behavior for supported bash request CLIs without prompts or blocked-attempt logs.
 - Added session lifecycle handling that resets ProtectMe attempt counters, shows mode/site-count status, reports config warnings, and clears status on shutdown.
 - Honored Pi project trust before loading project ProtectMe config, with ignored-project status in session and TUI surfaces.
@@ -32,3 +37,5 @@
 - Extracted shared ProtectMe config edit helpers for prompt and `/protectme` write flows.
 - Refreshed ProtectMe session footer status and bounded config warnings after successful `/protectme` edits.
 - Bounded `/protectme` recent blocked-host log reads and documented append-only log cleanup guidance.
+- Split the `/protectme` TUI panel into separate command, component, action, rendering, and shared-type modules.
+- Standardized CI dependency installation on `npm ci --ignore-scripts` to match Sonar lockfile validation.

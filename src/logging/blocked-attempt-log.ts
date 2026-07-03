@@ -12,7 +12,7 @@ export const DEFAULT_RECENT_BLOCKED_HOST_READ_CHUNK_BYTES = 16 * 1024;
 export const BLOCKED_ATTEMPT_LOG_RETENTION_DESCRIPTION =
   "ProtectMe keeps project blocked-attempt logs append-only and project-local; it does not compact, upload, or delete .pi/agent/protectme_log.jsonl automatically, and /protectme reads only a bounded tail window.";
 export const REDACTED_LOG_VALUE = "[REDACTED]";
-export const BLOCKED_ATTEMPT_LOG_OUTCOMES = ["blocked", "prompt_denied", "prompt_unavailable"] as const;
+export const BLOCKED_ATTEMPT_LOG_OUTCOMES = ["blocked", "prompt_denied", "prompt_error", "prompt_unavailable"] as const;
 export const NON_BLOCKED_ATTEMPT_OUTCOMES = [
   "allowed",
   "prompt_allowed_once",

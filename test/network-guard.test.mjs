@@ -3,10 +3,13 @@ import test from "node:test";
 
 import {
   buildProtectMeConfigWarningMessage,
+  createDefaultNetworkGuardDependencies,
   createNetworkGuardState,
   handleNetworkGuardSessionShutdown,
   handleNetworkGuardSessionStart,
   handleNetworkGuardToolCall,
+  handleNetworkGuardUserBash,
+  PROTECTME_GUIDANCE_CUSTOM_MESSAGE_TYPE,
   PROTECTME_SECOND_ATTEMPT_CHOICES,
   registerNetworkGuardEvents,
   resetNetworkGuardSessionState,
@@ -15,6 +18,11 @@ import { buildBlockedAttemptLogEntry } from "../src/logging/blocked-attempt-log.
 
 const cwd = "/workspace/project";
 const homeDir = "/home/user";
+const agentDir = `${homeDir}/.pi/agent`;
+const promptErrorNotification = [
+  "ProtectMe blocked this repeated network request because the confirmation prompt failed.",
+  "No config was changed; update the allow list manually before retrying.",
+].join(" ");
 
 test("session start resets attempts, loads config, sets status, and shows warnings", async () => {
   const state = createNetworkGuardState();
@@ -77,7 +85,7 @@ test("invalid config warns on session start and still fails closed on tool calls
   assert.equal(fake.loggedAttempts[0].outcome, "blocked");
 });
 
-test("first disallowed bash request blocks, logs once, and sends guidance", async () => {
+test("first disallowed bash request blocks, logs once, and queues safe guidance", async () => {
   const state = createNetworkGuardState();
   const fake = createFakeDependencies(buildConfigResult());
   const ctx = createFakeContext();
@@ -103,7 +111,101 @@ test("first disallowed bash request blocks, logs once, and sends guidance", asyn
   assert.equal(fake.guidanceMessages.length, 1);
   assert.match(fake.guidanceMessages[0].message, /Do not retry blindly/u);
   assert.match(fake.guidanceMessages[0].message, /Continue with local or already allowed work/u);
-  assert.deepEqual(fake.guidanceMessages[0].options, { deliverAs: "followUp" });
+  assert.deepEqual(fake.guidanceMessages[0].options, { deliverAs: "steer" });
+});
+
+test("first disallowed user bash command blocks with a bash result and no guidance message", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult());
+  const ctx = createFakeContext();
+
+  const result = await handleNetworkGuardUserBash({ command: "curl https://example.com", cwd }, ctx, state, fake.dependencies);
+
+  assert.deepEqual(result, {
+    result: {
+      output:
+        'ProtectMe blocked network request to example.com. mode: "block" allows only configured hosts. Do not retry blindly; continue with local or already allowed work, or ask the user if access is required.\n',
+      exitCode: 1,
+      cancelled: false,
+      truncated: false,
+    },
+  });
+  assert.equal(fake.loggedAttempts.length, 1);
+  assert.equal(fake.loggedAttempts[0].toolName, "user_bash");
+  assert.equal(fake.loggedAttempts[0].command, "curl https://example.com");
+  assert.equal(fake.loggedAttempts[0].host, "example.com");
+  assert.equal(fake.loggedAttempts[0].attempt, 1);
+  assert.equal(fake.loggedAttempts[0].outcome, "blocked");
+  assert.equal(fake.guidanceMessages.length, 0);
+});
+
+test("repeated user bash command can be allowed once through the shared prompt", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult());
+  const ctx = createFakeContext({ hasUI: true, selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.allowOnce] });
+  const event = { command: "curl https://api.example.com/v1", cwd };
+
+  await handleNetworkGuardUserBash(event, ctx, state, fake.dependencies);
+  const result = await handleNetworkGuardUserBash(event, ctx, state, fake.dependencies);
+
+  assert.equal(result, undefined);
+  assert.equal(ctx.ui.selectCalls.length, 1);
+  assert.deepEqual(ctx.ui.selectCalls[0].options, Object.values(PROTECTME_SECOND_ATTEMPT_CHOICES));
+  assert.match(ctx.ui.selectCalls[0].title, /api\.example\.com/u);
+  assert.match(ctx.ui.selectCalls[0].title, /Choose how to handle this request/u);
+  assert.equal(ctx.ui.editorCalls.length, 0);
+  assert.equal(fake.loggedAttempts.length, 1);
+  assert.equal(fake.projectWrites.length, 0);
+  assert.equal(fake.globalWrites.length, 0);
+});
+
+test("no-UI repeated user bash command fails closed with a bash result", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult());
+  const ctx = createFakeContext({ hasUI: false });
+  const event = { command: "curl https://example.com", cwd };
+
+  await handleNetworkGuardUserBash(event, ctx, state, fake.dependencies);
+  const result = await handleNetworkGuardUserBash(event, ctx, state, fake.dependencies);
+
+  assert.deepEqual(result, {
+    result: {
+      output:
+        "ProtectMe blocked repeated network request to example.com. Confirmation is unavailable because this session has no UI, so the request failed closed.\n",
+      exitCode: 1,
+      cancelled: false,
+      truncated: false,
+    },
+  });
+  assert.equal(ctx.ui.selectCalls.length, 0);
+  assert.equal(fake.loggedAttempts.length, 2);
+  assert.equal(fake.loggedAttempts[1].toolName, "user_bash");
+  assert.equal(fake.loggedAttempts[1].attempt, 2);
+  assert.equal(fake.loggedAttempts[1].outcome, "prompt_unavailable");
+});
+
+test("default first-attempt guidance uses a custom message instead of a follow-up user message", async () => {
+  const state = createNetworkGuardState();
+  const fakePi = createFakePi();
+  const defaultDependencies = createDefaultNetworkGuardDependencies(fakePi);
+  const fake = createFakeDependencies(buildConfigResult());
+  const dependencies = { ...fake.dependencies, sendGuidance: defaultDependencies.sendGuidance };
+
+  const result = await handleNetworkGuardToolCall(
+    { toolName: "bash", input: { command: "curl https://example.com" } },
+    createFakeContext(),
+    state,
+    dependencies,
+  );
+
+  assert.equal(result?.block, true);
+  assert.equal(fakePi.userMessages.length, 0);
+  assert.equal(fakePi.messages.length, 1);
+  assert.match(fakePi.messages[0].message.content, /Do not retry blindly/u);
+  assert.equal(fakePi.messages[0].message.customType, PROTECTME_GUIDANCE_CUSTOM_MESSAGE_TYPE);
+  assert.equal(fakePi.messages[0].message.display, false);
+  assert.deepEqual(fakePi.messages[0].message.details, { source: "network_guard" });
+  assert.deepEqual(fakePi.messages[0].options, { deliverAs: "steer" });
 });
 
 test("allowed bash request is not blocked or logged", async () => {
@@ -289,8 +391,8 @@ test("untrusted project config is visible as ignored and does not disable blocki
   );
 
   assert.deepEqual(fake.loadInputs, [
-    { cwd, homeDir, projectTrusted: false },
-    { cwd, homeDir, projectTrusted: false },
+    { cwd, homeDir, agentDir, projectTrusted: false },
+    { cwd, homeDir, agentDir, projectTrusted: false },
   ]);
   assert.equal(ctx.ui.statusCalls[0].text, "ProtectMe: block · 0 sites · project config ignored");
   assert.match(ctx.ui.notifications[0].message, /project config ignored/u);
@@ -321,8 +423,8 @@ test("untrusted project config cannot be used for repeated-attempt allow-list wr
     reason: "ProtectMe kept blocking network request to project-only.example.com. The user did not approve this call.",
   });
   assert.deepEqual(fake.loadInputs, [
-    { cwd, homeDir, projectTrusted: false },
-    { cwd, homeDir, projectTrusted: false },
+    { cwd, homeDir, agentDir, projectTrusted: false },
+    { cwd, homeDir, agentDir, projectTrusted: false },
   ]);
   assert.equal(ctx.ui.selectCalls.length, 1);
   assert.equal(ctx.ui.editorCalls.length, 0);
@@ -468,7 +570,7 @@ test("second blocked attempt can add global config and allow the current call", 
   assert.equal(ctx.ui.editorCalls[0].prefill, "example.com");
   assert.deepEqual(fake.globalWrites, [
     {
-      paths: { globalConfigPath: `${homeDir}/.pi/agent/protectme.json` },
+      paths: { globalConfigPath: `${agentDir}/protectme.json` },
       config: { allowList: ["global.example"] },
     },
   ]);
@@ -493,6 +595,62 @@ test("keep blocked returns a block result and logs the denied prompt outcome", a
   assert.equal(fake.loggedAttempts[1].attempt, 2);
   assert.equal(fake.loggedAttempts[1].outcome, "prompt_denied");
   assert.equal(ctx.ui.editorCalls.length, 0);
+});
+
+test("rejected repeated-attempt choice prompt fails closed with bounded log metadata", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult());
+  const promptSecret = "select-secret-token";
+  const ctx = createFakeContext({ hasUI: true, selectErrors: [new Error(promptSecret)] });
+  const event = { toolName: "bash", input: { command: "curl https://example.com" } };
+
+  await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
+  const result = await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
+
+  assert.deepEqual(result, {
+    block: true,
+    reason: buildExpectedPromptErrorReason("example.com"),
+  });
+  assert.equal(ctx.ui.selectCalls.length, 1);
+  assert.equal(ctx.ui.editorCalls.length, 0);
+  assert.equal(fake.projectWrites.length, 0);
+  assert.equal(fake.globalWrites.length, 0);
+  assert.equal(fake.loggedAttempts.length, 2);
+  assert.equal(fake.loggedAttempts[1].attempt, 2);
+  assert.equal(fake.loggedAttempts[1].outcome, "prompt_error");
+  assert.doesNotMatch(JSON.stringify(fake.loggedAttempts[1]), /select-secret-token/u);
+  assert.deepEqual(ctx.ui.notifications, [{ message: promptErrorNotification, type: "error" }]);
+  assert.doesNotMatch(JSON.stringify(ctx.ui.notifications), /select-secret-token/u);
+});
+
+test("rejected allow-list editor prompt fails closed without config writes", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult());
+  const promptSecret = "editor-secret-token";
+  const ctx = createFakeContext({
+    hasUI: true,
+    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addProject],
+    editorErrors: [new Error(promptSecret)],
+  });
+  const event = { toolName: "bash", input: { command: "curl https://example.com" } };
+
+  await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
+  const result = await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
+
+  assert.deepEqual(result, {
+    block: true,
+    reason: buildExpectedPromptErrorReason("example.com"),
+  });
+  assert.equal(ctx.ui.selectCalls.length, 1);
+  assert.equal(ctx.ui.editorCalls.length, 1);
+  assert.equal(fake.projectWrites.length, 0);
+  assert.equal(fake.globalWrites.length, 0);
+  assert.equal(fake.loggedAttempts.length, 2);
+  assert.equal(fake.loggedAttempts[1].attempt, 2);
+  assert.equal(fake.loggedAttempts[1].outcome, "prompt_error");
+  assert.doesNotMatch(JSON.stringify(fake.loggedAttempts[1]), /editor-secret-token/u);
+  assert.deepEqual(ctx.ui.notifications, [{ message: promptErrorNotification, type: "error" }]);
+  assert.doesNotMatch(JSON.stringify(ctx.ui.notifications), /editor-secret-token/u);
 });
 
 test("no-UI second attempt fails closed and explains confirmation is unavailable", async () => {
@@ -532,6 +690,19 @@ test("registration wires session reset and tool_call handling", async () => {
   );
 });
 
+test("registration wires user_bash handling", async () => {
+  const fakePi = createFakePi();
+  const fake = createFakeDependencies(buildConfigResult());
+  const state = registerNetworkGuardEvents(fakePi, fake.dependencies);
+
+  const result = await fakePi.handlers.user_bash({ command: "curl https://user.example.com", cwd }, createFakeContext());
+
+  assert.equal(result?.result.exitCode, 1);
+  assert.match(result?.result.output, /user\.example\.com/u);
+  assert.equal(state.blockedHostAttempts.get("user.example.com"), 1);
+  assert.equal(fake.loggedAttempts[0].toolName, "user_bash");
+});
+
 function createFakeDependencies(configResult) {
   const loggedAttempts = [];
   const guidanceMessages = [];
@@ -544,6 +715,9 @@ function createFakeDependencies(configResult) {
   const dependencies = {
     getHomeDir() {
       return homeDir;
+    },
+    getAgentDir() {
+      return agentDir;
     },
     async loadConfig(input) {
       loadCalls += 1;
@@ -584,9 +758,13 @@ function createFakeDependencies(configResult) {
 }
 
 function buildExpectedConfigLoadInput(input) {
-  if (input.projectTrusted === false) return { cwd, homeDir, projectTrusted: false };
+  if (input.projectTrusted === false) return { cwd, homeDir, agentDir, projectTrusted: false };
 
-  return { cwd, homeDir };
+  return { cwd, homeDir, agentDir };
+}
+
+function buildExpectedPromptErrorReason(host) {
+  return `ProtectMe blocked repeated network request to ${host}. The confirmation prompt failed, so the request failed closed. Update the allow list manually or retry after the UI prompt recovers.`;
 }
 
 function createFakeContext(options = {}) {
@@ -608,6 +786,8 @@ function createFakeContext(options = {}) {
 function createFakeUi(options) {
   const selectChoices = [...(options.selectChoices ?? [])];
   const editorValues = [...(options.editorValues ?? [])];
+  const selectErrors = [...(options.selectErrors ?? [])];
+  const editorErrors = [...(options.editorErrors ?? [])];
   const selectCalls = [];
   const editorCalls = [];
   const statusCalls = [];
@@ -620,10 +800,16 @@ function createFakeUi(options) {
     notifications,
     async select(title, choices) {
       selectCalls.push({ title, options: choices });
+      const selectError = selectErrors.shift();
+      if (selectError) throw selectError;
+
       return selectChoices.shift();
     },
     async editor(title, prefill) {
       editorCalls.push({ title, prefill });
+      const editorError = editorErrors.shift();
+      if (editorError) throw editorError;
+
       return editorValues.shift();
     },
     setStatus(key, text) {
@@ -637,13 +823,22 @@ function createFakeUi(options) {
 
 function createFakePi() {
   const handlers = {};
+  const messages = [];
+  const userMessages = [];
 
   return {
     handlers,
+    messages,
+    userMessages,
     on(name, handler) {
       handlers[name] = handler;
     },
-    sendUserMessage() {},
+    sendMessage(message, options) {
+      messages.push({ message, options });
+    },
+    sendUserMessage(content, options) {
+      userMessages.push({ content, options });
+    },
   };
 }
 
@@ -814,7 +1009,8 @@ function buildConfigResult(options = {}) {
   const paths = {
     cwd,
     homeDir,
-    globalConfigPath: `${homeDir}/.pi/agent/protectme.json`,
+    agentDir,
+    globalConfigPath: `${agentDir}/protectme.json`,
     projectConfigPath: `${cwd}/.pi/protectme.json`,
     blockedAttemptLogPath: `${cwd}/.pi/agent/protectme_log.jsonl`,
   };

@@ -1,17 +1,17 @@
 # ProtectMe
 
-ProtectMe is a Pi extension that guards Pi agent network and website access by checking supported shell-network requests against global and project allow lists.
+ProtectMe is a Pi extension that guards Pi agent and direct user bash network access by checking supported shell-network requests against global and project allow lists.
 
 ## What ProtectMe guards
 
-ProtectMe inspects `bash` tool calls for supported request-making CLIs:
+ProtectMe inspects both LLM `bash` tool calls and Pi user bash commands typed with `!` or `!!` for supported request-making CLIs:
 
 - `curl`
 - `wget`
 - `http`
 - `https`
 
-It intentionally ignores raw URL text when no supported request CLI is present, and it does not parse `read`, `write`, `edit`, or other file/content tool inputs just because they contain URLs.
+It intentionally ignores raw URL text when no supported request CLI is present, and it does not parse `read`, `write`, `edit`, or other file/content tool inputs just because they contain URLs. Shell commands run outside Pi, or through CLIs not listed above, are outside ProtectMe's v1 guard boundary.
 
 ProtectMe also inspects approved non-network wrappers such as `sudo`, `env`, `time`, `timeout`, and `nice` when they launch a supported request CLI. URL-bearing proxy/resolver options are guarded as additional destinations. Static option sources that can hide network destinations, such as `curl --config` or `wget --input-file`, fail closed because ProtectMe cannot inspect those files safely before execution.
 
@@ -43,6 +43,8 @@ ProtectMe reads two JSON config files:
 | --- | --- |
 | Global | `~/.pi/agent/protectme.json` |
 | Project | `.pi/protectme.json` |
+
+These are the default Pi paths. ProtectMe uses Pi's configured project config directory name (default `.pi`) for project-local files and Pi's agent config directory for the global file, so `PI_CODING_AGENT_DIR` moves the global ProtectMe config in standard Pi installations.
 
 Project config is honored only when Pi reports the current project as trusted. In untrusted projects, ProtectMe does not read `.pi/protectme.json` and reports the project config as ignored.
 
@@ -103,8 +105,8 @@ Examples:
 
 When effective mode is `"block"`:
 
-1. The first detected request to a disallowed host is blocked. The Pi session is not aborted; ProtectMe returns a block reason and sends concise guidance not to retry blindly.
-2. The second and later blocked attempts for the same host prompt in UI-capable mode with these choices:
+1. The first detected request to a disallowed host is blocked. The Pi session is not aborted. Agent `bash` tool calls receive a block reason and concise guidance not to retry blindly; direct `!`/`!!` user bash commands receive a blocked bash result without executing the command.
+2. The second and later blocked attempts for the same host, from either agent or user bash, prompt in UI-capable mode with these choices:
    - allow once,
    - add to project config and allow this call,
    - add to global config and allow this call,
@@ -157,6 +159,7 @@ The log is project-local and append-only. ProtectMe does not compact, upload, or
 - Unexpected block: run `/protectme`, inspect the effective mode and counts, then add the intended host to project or global config.
 - Config warning: fix invalid JSON/schema, unreadable files, or ignored invalid allow-list entries; while any loaded source is invalid or unreadable, ProtectMe uses `block` mode with an empty effective allow-list.
 - Prompt unavailable: use Pi TUI mode for confirmation prompts, or edit config manually.
+- Direct shell command was not blocked: run commands through Pi `!`/`!!` for ProtectMe coverage, and use OS/container network controls for commands outside Pi or unsupported CLIs.
 - Need to bypass protection temporarily: set project config to `{ "mode": "allow" }`.
 - Want a clean smoke test: run `pi --no-extensions -e .` from this repository.
 

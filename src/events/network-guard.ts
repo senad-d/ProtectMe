@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir as getPiAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import {
   appendProtectMeConfigAllowListEntry,
@@ -30,8 +30,10 @@ import {
   buildProtectMeConfigWriteFailedBlockReason,
   buildProtectMeFirstBlockGuidance,
   buildProtectMePromptDeniedBlockReason,
+  buildProtectMePromptErrorBlockReason,
   buildProtectMePromptUnavailableBlockReason,
   buildProtectMeUnsupportedNetworkOptionBlockReason,
+  extractBashNetworkRequestCandidates,
   extractToolCallNetworkRequestCandidates,
   matchAllowedHost,
   suggestCleanAllowListEntry,
@@ -57,18 +59,26 @@ export const PROTECTME_SECOND_ATTEMPT_CHOICES = {
   keepBlocked: "Keep blocked",
 } as const;
 
+export const PROTECTME_GUIDANCE_CUSTOM_MESSAGE_TYPE = "protectme-guidance";
+
 const PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES = Object.values(PROTECTME_SECOND_ATTEMPT_CHOICES);
+const PROTECTME_USER_BASH_LOG_TOOL_NAME = "user_bash";
+const PROTECTME_PROMPT_ERROR_NOTIFICATION = [
+  "ProtectMe blocked this repeated network request because the confirmation prompt failed.",
+  "No config was changed; update the allow list manually before retrying.",
+].join(" ");
 
 export interface NetworkGuardState {
   blockedHostAttempts: Map<string, number>;
 }
 
 export interface NetworkGuardGuidanceOptions {
-  deliverAs?: "followUp" | "steer";
+  deliverAs?: "steer" | "nextTurn";
 }
 
 export interface NetworkGuardDependencies {
   getHomeDir(): string;
+  getAgentDir(): string;
   loadConfig(input: ProtectMeConfigPathInput): Promise<ProtectMeConfigLoadResult>;
   appendBlockedAttemptLog(input: AppendBlockedAttemptLogInput): Promise<BlockedAttemptLogEntry>;
   mutateProjectConfig(
@@ -87,9 +97,22 @@ export interface ToolCallBlockResult {
   reason: string;
 }
 
+export interface UserBashBlockResult {
+  result: {
+    output: string;
+    exitCode: number | undefined;
+    cancelled: boolean;
+    truncated: boolean;
+  };
+}
+
 interface ToolCallEventLike {
   toolName: string;
   input: unknown;
+}
+
+interface UserBashEventLike {
+  command: string;
 }
 
 interface NetworkGuardPromptUI {
@@ -137,12 +160,21 @@ export function resetNetworkGuardSessionState(state: NetworkGuardState): void {
 export function createDefaultNetworkGuardDependencies(pi: ExtensionAPI): NetworkGuardDependencies {
   return {
     getHomeDir: homedir,
+    getAgentDir: getPiAgentDir,
     loadConfig: loadProtectMeConfig,
     appendBlockedAttemptLog,
     mutateProjectConfig: mutateProjectProtectMeConfig,
     mutateGlobalConfig: mutateGlobalProtectMeConfig,
     sendGuidance(message, options) {
-      pi.sendUserMessage(message, options);
+      pi.sendMessage(
+        {
+          customType: PROTECTME_GUIDANCE_CUSTOM_MESSAGE_TYPE,
+          content: message,
+          display: false,
+          details: { source: "network_guard" },
+        },
+        { deliverAs: options?.deliverAs ?? "steer" },
+      );
     },
   };
 }
@@ -156,6 +188,7 @@ export function registerNetworkGuardEvents(
   pi.on("session_start", (_event, ctx) => handleNetworkGuardSessionStart(ctx, state, dependencies));
   pi.on("session_shutdown", (_event, ctx) => handleNetworkGuardSessionShutdown(ctx));
   pi.on("tool_call", (event, ctx) => handleNetworkGuardToolCall(event, ctx, state, dependencies));
+  pi.on("user_bash", (event, ctx) => handleNetworkGuardUserBash(event, ctx, state, dependencies));
 
   return state;
 }
@@ -205,6 +238,32 @@ export async function handleNetworkGuardToolCall(
   };
 }
 
+export async function handleNetworkGuardUserBash(
+  event: unknown,
+  ctx: NetworkGuardContextLike,
+  state: NetworkGuardState,
+  dependencies: NetworkGuardDependencies,
+): Promise<UserBashBlockResult | undefined> {
+  const userBashEvent = parseUserBashEvent(event);
+  if (!userBashEvent) return undefined;
+
+  const candidates = extractBashNetworkRequestCandidates(userBashEvent.command);
+  if (candidates.length === 0) return undefined;
+
+  const config = await dependencies.loadConfig(buildNetworkGuardConfigLoadInput(ctx, dependencies));
+  if (config.effective.mode === "allow") return undefined;
+
+  const disallowedRequest = findFirstDisallowedRequest(candidates, config, state);
+  if (!disallowedRequest) return undefined;
+
+  const decision = await decideDisallowedRequest(ctx, config, disallowedRequest, dependencies);
+  if (decision.action === "allow") return undefined;
+
+  await logBlockedRequest(buildUserBashLogEvent(userBashEvent), ctx, config, disallowedRequest, dependencies, decision.outcome);
+
+  return buildUserBashBlockResult(decision.reason);
+}
+
 export function incrementBlockedHostAttempt(state: NetworkGuardState, host: string): number {
   const attempt = (state.blockedHostAttempts.get(host) ?? 0) + 1;
   state.blockedHostAttempts.set(host, attempt);
@@ -222,6 +281,15 @@ function parseToolCallEvent(event: unknown): ToolCallEventLike | null {
   };
 }
 
+function parseUserBashEvent(event: unknown): UserBashEventLike | null {
+  if (!isRecord(event)) return null;
+  if (typeof event.command !== "string") return null;
+
+  return {
+    command: event.command,
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -231,10 +299,11 @@ function buildNetworkGuardConfigLoadInput(
   dependencies: NetworkGuardDependencies,
 ): ProtectMeConfigPathInput {
   const homeDir = dependencies.getHomeDir();
+  const agentDir = dependencies.getAgentDir();
   const projectTrusted = readProjectTrusted(ctx);
-  if (projectTrusted) return { cwd: ctx.cwd, homeDir };
+  if (projectTrusted) return { cwd: ctx.cwd, homeDir, agentDir };
 
-  return { cwd: ctx.cwd, homeDir, projectTrusted: false };
+  return { cwd: ctx.cwd, homeDir, agentDir, projectTrusted: false };
 }
 
 function readProjectTrusted(ctx: NetworkGuardContextLike): boolean {
@@ -304,7 +373,14 @@ async function promptForRepeatedBlockedRequest(
   request: DisallowedRequest,
   dependencies: NetworkGuardDependencies,
 ): Promise<NetworkGuardDecision> {
-  const choice = await ui.select(buildRepeatedAttemptPrompt(config, request), PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES);
+  let choice: string | undefined;
+
+  try {
+    choice = await ui.select(buildRepeatedAttemptPrompt(config, request), PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES);
+  } catch {
+    notifyPromptError(ui);
+    return buildPromptErrorDecision(request.candidate.host);
+  }
 
   if (choice === PROTECTME_SECOND_ATTEMPT_CHOICES.allowOnce) return { action: "allow" };
   if (choice === PROTECTME_SECOND_ATTEMPT_CHOICES.addProject) return allowViaConfigWrite("project", ui, config, request, dependencies);
@@ -328,7 +404,15 @@ async function allowViaConfigWrite(
   }
 
   const suggestedEntry = buildSuggestedAllowListEntry(request);
-  const editedEntry = await ui.editor(buildAllowListEntryEditorTitle(target, request.candidate.host), suggestedEntry);
+  let editedEntry: string | undefined;
+
+  try {
+    editedEntry = await ui.editor(buildAllowListEntryEditorTitle(target, request.candidate.host), suggestedEntry);
+  } catch {
+    notifyPromptError(ui);
+    return buildPromptErrorDecision(request.candidate.host);
+  }
+
   const writePlan = planProtectMeConfigAllowListAppend(configSource, editedEntry);
 
   if (!writePlan.ok) {
@@ -373,7 +457,7 @@ function buildRepeatedAttemptPrompt(config: ProtectMeConfigLoadResult, request: 
     `Suggested allow-list entry: ${suggestedEntry}`,
     `Project config: ${formatConfigSourceForPrompt(config.projectConfig)}`,
     `Global config: ${formatConfigSourceForPrompt(config.globalConfig)}`,
-    "Choose how to handle this tool call.",
+    "Choose how to handle this request.",
   ].join("\n");
 }
 
@@ -410,7 +494,27 @@ async function mutateTargetConfig(
 }
 
 function notifyPromptFailure(ui: NetworkGuardPromptUI, message: string): void {
-  ui.notify?.(`ProtectMe could not allow this call: ${message}`, "error");
+  notifyPromptUser(ui, `ProtectMe could not allow this call: ${message}`);
+}
+
+function notifyPromptError(ui: NetworkGuardPromptUI): void {
+  notifyPromptUser(ui, PROTECTME_PROMPT_ERROR_NOTIFICATION);
+}
+
+function notifyPromptUser(ui: NetworkGuardPromptUI, message: string): void {
+  try {
+    ui.notify?.(message, "error");
+  } catch {
+    // Notification failures must not replace the primary ProtectMe fail-closed decision.
+  }
+}
+
+function buildPromptErrorDecision(host: string): BlockDecision {
+  return {
+    action: "block",
+    outcome: "prompt_error",
+    reason: buildProtectMePromptErrorBlockReason(host),
+  };
 }
 
 function buildPromptDeniedDecision(host: string): BlockDecision {
@@ -418,6 +522,24 @@ function buildPromptDeniedDecision(host: string): BlockDecision {
     action: "block",
     outcome: "prompt_denied",
     reason: buildProtectMePromptDeniedBlockReason(host),
+  };
+}
+
+function buildUserBashLogEvent(event: UserBashEventLike): ToolCallEventLike {
+  return {
+    toolName: PROTECTME_USER_BASH_LOG_TOOL_NAME,
+    input: { command: event.command },
+  };
+}
+
+function buildUserBashBlockResult(reason: string): UserBashBlockResult {
+  return {
+    result: {
+      output: `${reason}\n`,
+      exitCode: 1,
+      cancelled: false,
+      truncated: false,
+    },
   };
 }
 
@@ -467,5 +589,5 @@ function toConfigSourceMetadata(configSource: ParsedProtectMeConfig): ProtectMeC
 }
 
 function sendFirstAttemptGuidance(request: DisallowedRequest, dependencies: NetworkGuardDependencies): void {
-  dependencies.sendGuidance(buildProtectMeFirstBlockGuidance(request.candidate.host), { deliverAs: "followUp" });
+  dependencies.sendGuidance(buildProtectMeFirstBlockGuidance(request.candidate.host), { deliverAs: "steer" });
 }

@@ -7,12 +7,10 @@ import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { mergeProtectMeConfigs } from "../src/config/index.ts";
-import {
-  extractRecentBlockedHosts,
-  handleProtectMeCommand,
-  ProtectMePanelComponent,
-  readRecentBlockedHosts,
-} from "../src/ui/protectme-panel.ts";
+import { extractRecentBlockedHosts, readRecentBlockedHosts } from "../src/logging/blocked-attempt-log.ts";
+import { executeProtectMePanelAction } from "../src/ui/protectme-panel/actions.ts";
+import { renderProtectMePanel } from "../src/ui/protectme-panel/rendering.ts";
+import { handleProtectMeCommand, ProtectMePanelComponent } from "../src/ui/protectme-panel.ts";
 
 const plainTheme = {
   fg(_role, text) {
@@ -25,6 +23,7 @@ const plainTheme = {
 
 const cwd = "/workspace/project";
 const homeDir = "/home/user";
+const agentDir = `${homeDir}/.pi/agent`;
 
 test("ProtectMe panel wide layout uses two panes and displays config state", () => {
   const component = createPanelComponent();
@@ -40,6 +39,15 @@ test("ProtectMe panel wide layout uses two panes and displays config state", () 
   assert.equal(lines.some((line) => line.includes("Project site count") && line.includes("1")), true);
   assert.equal(lines.some((line) => line.includes("Effective site count") && line.includes("3")), true);
   assert.equal(lines.some((line) => line.includes("Recent blocked hosts") && line.includes("api.example.com")), true);
+  assertLinesFit(lines, 96);
+});
+
+test("ProtectMe panel rendering helper renders without the component state machine", () => {
+  const lines = renderProtectMePanel(96, buildPanelState(), 1, "global", { text: "Saved global config.", type: "info" }, plainTheme);
+
+  assert.equal(lines.some((line) => line.includes("writes global config")), true);
+  assert.equal(lines.some((line) => line.includes("Saved global config.")), true);
+  assert.equal(lines.some((line) => line.includes("Write target") && line.includes("▶")), true);
   assertLinesFit(lines, 96);
 });
 
@@ -101,7 +109,7 @@ test("/protectme command displays ignored project config state for untrusted pro
   const opened = await handleProtectMeCommand(context, dependencies);
 
   assert.equal(opened, true);
-  assert.deepEqual(dependencies.loadInputs, [{ cwd, homeDir, projectTrusted: false }]);
+  assert.deepEqual(dependencies.loadInputs, [{ cwd, homeDir, agentDir, projectTrusted: false }]);
   assert.equal(context.ui.renderedLines.some((line) => line.includes("project config ignored")), true);
 });
 
@@ -115,6 +123,16 @@ test("ProtectMe panel action chooses the project or global write target", async 
 
   assert.deepEqual(editable.ui.selectCalls, [{ title: "ProtectMe write target", options: ["Project config", "Global config"] }]);
   assert.equal(editable.component.render(96).some((line) => line.includes("writes global config")), true);
+});
+
+test("ProtectMe panel action executor toggles mode without the component state machine", async () => {
+  const editable = createEditablePanel();
+
+  const result = await executeProtectMePanelAction("toggleMode", "project", editable.state, editable.actionDependencies);
+
+  assert.deepEqual(result, { status: "success", message: "Saved project mode allow." });
+  assert.deepEqual(editable.projectWrites.at(-1).config, { mode: "allow", allowList: ["project.example.com"] });
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "ProtectMe: allow · 2 sites" });
 });
 
 test("ProtectMe panel actions toggle mode and add project/global entries", async () => {
@@ -200,6 +218,7 @@ test("ProtectMe panel write failures show errors and keep loaded config unchange
   const component = new ProtectMePanelComponent(state, plainTheme, () => {}, () => {}, {
     cwd,
     homeDir,
+    agentDir,
     ui,
     async loadConfig() {
       throw new Error("load should not run after failed write");
@@ -301,9 +320,10 @@ function createEditablePanel(config = buildEditableConfigResult()) {
   const actionDependencies = {
     cwd,
     homeDir,
+    agentDir,
     ui,
     async loadConfig(input) {
-      assert.deepEqual(input, { cwd, homeDir });
+      assert.deepEqual(input, { cwd, homeDir, agentDir });
       return currentConfig;
     },
     async readRecentBlockedHosts(logPath) {
@@ -326,6 +346,7 @@ function createEditablePanel(config = buildEditableConfigResult()) {
   const component = new ProtectMePanelComponent(state, plainTheme, () => {}, () => {}, actionDependencies);
 
   return {
+    actionDependencies,
     component,
     globalWrites,
     projectWrites,
@@ -367,14 +388,14 @@ function createFakeActionUi(options = {}) {
 }
 
 function buildEditableConfigResult(globalConfigFile = { mode: "block", allowList: ["global.example.com"] }, projectConfigFile = { allowList: ["project.example.com"] }) {
-  const globalConfig = buildParsedConfigSource("global", `${homeDir}/.pi/agent/protectme.json`, globalConfigFile);
+  const globalConfig = buildParsedConfigSource("global", `${agentDir}/protectme.json`, globalConfigFile);
   const projectConfig = buildParsedConfigSource("project", `${cwd}/.pi/protectme.json`, projectConfigFile);
 
   return buildConfigResultFromSources(globalConfig, projectConfig);
 }
 
 function buildIgnoredProjectConfigResult() {
-  const globalConfig = buildParsedConfigSource("global", `${homeDir}/.pi/agent/protectme.json`, { mode: "block" });
+  const globalConfig = buildParsedConfigSource("global", `${agentDir}/protectme.json`, { mode: "block" });
   const projectConfig = {
     source: "project",
     path: `${cwd}/.pi/protectme.json`,
@@ -391,7 +412,8 @@ function buildConfigResultFromSources(globalConfig, projectConfig) {
     paths: {
       cwd,
       homeDir,
-      globalConfigPath: `${homeDir}/.pi/agent/protectme.json`,
+      agentDir,
+      globalConfigPath: `${agentDir}/protectme.json`,
       projectConfigPath: `${cwd}/.pi/protectme.json`,
       blockedAttemptLogPath: `${cwd}/.pi/agent/protectme_log.jsonl`,
     },
@@ -439,6 +461,7 @@ function buildConfigResult() {
     paths: {
       cwd,
       homeDir,
+      agentDir,
       globalConfigPath: "/global/protectme.json",
       projectConfigPath: "/project/protectme.json",
       blockedAttemptLogPath: "/project/protectme_log.jsonl",
@@ -457,9 +480,9 @@ function buildConfigResult() {
 }
 
 function buildExpectedConfigLoadInput(input) {
-  if (input.projectTrusted === false) return { cwd, homeDir, projectTrusted: false };
+  if (input.projectTrusted === false) return { cwd, homeDir, agentDir, projectTrusted: false };
 
-  return { cwd, homeDir };
+  return { cwd, homeDir, agentDir };
 }
 
 function createFakeCommandContext(mode, options = {}) {
@@ -505,6 +528,9 @@ function createFakeCommandDependencies(config = buildConfigResult()) {
     },
     getHomeDir() {
       return homeDir;
+    },
+    getAgentDir() {
+      return agentDir;
     },
     async loadConfig(input) {
       loadCalls += 1;

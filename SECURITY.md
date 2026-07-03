@@ -9,13 +9,14 @@ pi install npm:@senad-d/protectme@<version>
 pi install git:github.com/senad-d/pi-protectme@<tag>
 ```
 
-ProtectMe is a guardrail for supported Pi `bash` tool calls, not a sandbox, firewall, proxy, or operating-system network policy. It only evaluates supported request-making commands that Pi sends through the extension event flow.
+ProtectMe is a guardrail for supported Pi `bash` tool calls and Pi user bash commands typed with `!` or `!!`, not a sandbox, firewall, proxy, or operating-system network policy. It only evaluates supported request-making commands that Pi sends through the extension event flow.
 
 ## Implemented security-sensitive behavior
 
 ProtectMe currently:
 
-- inspects supported `bash` tool calls for request-making commands: `curl`, `wget`, `http`, and `https`,
+- inspects supported LLM `bash` tool calls for request-making commands: `curl`, `wget`, `http`, and `https`,
+- inspects supported Pi user bash commands typed with `!` or `!!` for the same request-making commands,
 - ignores file/content tools such as `read`, `write`, and `edit` even if their inputs contain URLs,
 - blocks detected network requests when effective `mode` is `block` and the host is not in the effective `allowList`,
 - allows detected requests without prompts or blocked-attempt logs when effective `mode` is `allow`,
@@ -27,6 +28,8 @@ ProtectMe currently:
 
 ProtectMe does not:
 
+- guard shell commands executed outside Pi's `bash` tool-call or `user_bash` event flow,
+- guard unsupported network CLIs beyond `curl`, `wget`, `http`, and `https`,
 - execute shell commands itself,
 - make network calls itself,
 - require API keys, tokens, credentials, or secrets,
@@ -68,7 +71,7 @@ Each JSON line may include:
 - attempt count,
 - effective mode,
 - config source metadata,
-- outcome (`blocked`, `prompt_denied`, or `prompt_unavailable`),
+- outcome (`blocked`, `prompt_denied`, `prompt_error`, or `prompt_unavailable`),
 - command snippet metadata.
 
 Command snippets are bounded, visibly truncated when long, and redact common authorization headers and secret assignment fragments. Logs can still contain sensitive project paths, hostnames, command structure, or non-redacted arguments. Do not commit or share `.pi/agent/protectme_log.jsonl` from sensitive repositories.

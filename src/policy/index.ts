@@ -12,6 +12,7 @@ export {
   buildProtectMeConfigWriteFailedBlockReason,
   buildProtectMeFirstBlockGuidance,
   buildProtectMePromptDeniedBlockReason,
+  buildProtectMePromptErrorBlockReason,
   buildProtectMePromptUnavailableBlockReason,
   buildProtectMeUnsupportedNetworkOptionBlockReason,
 } from "./block-message.ts";

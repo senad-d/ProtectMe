@@ -34,6 +34,15 @@ test("preparation specs are present and implementation backlog remains available
   assert.match(taskSpec, /- \[[ x]\] /);
 });
 
+test("CI workflows use the same lockfile install strategy", async () => {
+  const ciWorkflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const sonarWorkflow = await readFile(new URL("../.github/workflows/sonar.yml", import.meta.url), "utf8");
+
+  assert.deepEqual(extractNpmInstallCommands(ciWorkflow), ["npm ci --ignore-scripts"]);
+  assert.deepEqual(extractNpmInstallCommands(sonarWorkflow), ["npm ci --ignore-scripts"]);
+  assert.match(ciWorkflow, /matching the Sonar workflow/u);
+});
+
 test("Sonar workflow coverage script exists and matches configured LCOV report", async () => {
   const sonarWorkflow = await readFile(new URL("../.github/workflows/sonar.yml", import.meta.url), "utf8");
   const sonarProperties = await readFile(new URL("../sonar-project.properties", import.meta.url), "utf8");
@@ -61,4 +70,8 @@ test("documentation includes implemented config schema and isolated smoke comman
 
 function extractNpmRunScripts(workflowText) {
   return [...workflowText.matchAll(/\brun:\s*npm run ([\w:-]+)/gu)].map((match) => match[1]);
+}
+
+function extractNpmInstallCommands(workflowText) {
+  return [...workflowText.matchAll(/\brun:\s*(npm (?:ci|install)(?:[^\n]*))/gu)].map((match) => match[1].trim());
 }

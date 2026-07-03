@@ -24,7 +24,12 @@ src/
 │   ├── prompt-suggestion.ts      # clean editable allow-entry suggestions for repeated blocks
 │   └── index.ts                  # policy barrel exports and registration hook
 ├── ui/
-│   └── protectme-panel.ts        # /protectme command plus responsive config viewing and editing actions
+│   ├── protectme-panel.ts        # /protectme command registration and command-mode gating
+│   └── protectme-panel/
+│       ├── actions.ts            # TUI action orchestration and config-write refresh behavior
+│       ├── component.ts          # keyboard routing, panel state, and render caching
+│       ├── rendering.ts          # pure responsive layout, settings rows, and text fitting
+│       └── types.ts              # shared TUI panel contracts
 ├── constants.ts                  # shared names, command name, status key, config/log paths
 └── extension.ts                  # composition root that calls register* hooks only
 ```
@@ -33,7 +38,8 @@ src/
 
 - `extension.ts` imports feature modules and calls `register*` functions only.
 - `events/network-guard.ts` registers `session_start`, `session_shutdown`, and `tool_call` behavior.
-- `ui/protectme-panel.ts` registers `/protectme`, renders responsive wide/narrow/tiny layouts, reads recent blocked hosts, and writes config through explicit panel actions.
+- `ui/protectme-panel.ts` registers `/protectme` and loads config/log summaries before opening the TUI component.
+- `ui/protectme-panel/` keeps keyboard routing, action execution, and pure rendering in separately testable modules.
 - `logging/blocked-attempt-log.ts` owns JSONL entry construction, redaction/truncation, directory creation, and appending blocked attempts.
 - `config/` owns config schema validation, path resolution, load/merge semantics, normalization, and safe write-back.
 - `policy/` owns pure request detection, host normalization, matching, and clean prompt suggestions.

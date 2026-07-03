@@ -16,6 +16,10 @@ export function buildProtectMePromptUnavailableBlockReason(host: string): string
   return `${EXTENSION_DISPLAY_NAME} blocked repeated network request to ${host}. Confirmation is unavailable because this session has no UI, so the request failed closed.`;
 }
 
+export function buildProtectMePromptErrorBlockReason(host: string): string {
+  return `${EXTENSION_DISPLAY_NAME} blocked repeated network request to ${host}. The confirmation prompt failed, so the request failed closed. Update the allow list manually or retry after the UI prompt recovers.`;
+}
+
 export function buildProtectMePromptDeniedBlockReason(host: string): string {
   return `${EXTENSION_DISPLAY_NAME} kept blocking network request to ${host}. The user did not approve this call.`;
 }

@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
+import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+
 import {
   createDefaultProtectMeConfig,
   resolveBlockedAttemptLogPath,
+  resolveDefaultAgentDir,
   resolveGlobalConfigPath,
   resolveMissingProtectMeConfig,
   resolveProjectConfigPath,
@@ -13,20 +16,43 @@ import {
 
 const cwd = resolve("test-fixtures", "project");
 const homeDir = resolve("test-fixtures", "home");
+const agentDir = join(homeDir, CONFIG_DIR_NAME, "agent");
 
 test("config path helpers resolve deterministic ProtectMe paths", () => {
   const paths = resolveProtectMeConfigPaths({ cwd, homeDir });
 
-  assert.equal(resolveGlobalConfigPath(homeDir), join(homeDir, ".pi/agent/protectme.json"));
-  assert.equal(resolveProjectConfigPath(cwd), join(cwd, ".pi/protectme.json"));
-  assert.equal(resolveBlockedAttemptLogPath(cwd), join(cwd, ".pi/agent/protectme_log.jsonl"));
+  assert.equal(resolveDefaultAgentDir(homeDir), agentDir);
+  assert.equal(resolveGlobalConfigPath(agentDir), join(agentDir, "protectme.json"));
+  assert.equal(resolveProjectConfigPath(cwd), join(cwd, CONFIG_DIR_NAME, "protectme.json"));
+  assert.equal(resolveBlockedAttemptLogPath(cwd), join(cwd, CONFIG_DIR_NAME, "agent", "protectme_log.jsonl"));
   assert.deepEqual(paths, {
     cwd,
     homeDir,
-    globalConfigPath: join(homeDir, ".pi/agent/protectme.json"),
-    projectConfigPath: join(cwd, ".pi/protectme.json"),
-    blockedAttemptLogPath: join(cwd, ".pi/agent/protectme_log.jsonl"),
+    agentDir,
+    globalConfigPath: join(agentDir, "protectme.json"),
+    projectConfigPath: join(cwd, CONFIG_DIR_NAME, "protectme.json"),
+    blockedAttemptLogPath: join(cwd, CONFIG_DIR_NAME, "agent", "protectme_log.jsonl"),
   });
+});
+
+test("config path helpers honor Pi's custom global agent directory", () => {
+  const customAgentDir = resolve("test-fixtures", "custom-agent-dir");
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = customAgentDir;
+
+  try {
+    const paths = resolveProtectMeConfigPaths({ cwd });
+
+    assert.equal(paths.agentDir, customAgentDir);
+    assert.equal(paths.globalConfigPath, join(customAgentDir, "protectme.json"));
+    assert.equal(paths.projectConfigPath, join(cwd, CONFIG_DIR_NAME, "protectme.json"));
+  } finally {
+    if (previousAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  }
 });
 
 test("missing config resolves to blocking mode with an empty allowList", () => {
