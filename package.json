@@ -7,12 +7,12 @@
   "author": "Senad Dizdarević <112484166+senad-d@users.noreply.github.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/senad-d/pi-protectme.git"
+    "url": "git+https://github.com/senad-d/protectme.git"
   },
   "bugs": {
-    "url": "https://github.com/senad-d/pi-protectme/issues"
+    "url": "https://github.com/senad-d/protectme/issues"
   },
-  "homepage": "https://github.com/senad-d/pi-protectme#readme",
+  "homepage": "https://github.com/senad-d/protectme#readme",
   "keywords": [
     "pi-package",
     "pi-extension",
@@ -57,7 +57,8 @@
   "pi": {
     "extensions": [
       "./src/extension.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/senad-d/ProtectMe/main/img/demo.gif"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

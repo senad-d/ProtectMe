@@ -28,8 +28,8 @@ Inside the isolated Pi TUI session:
 1. Run `/protectme`.
 2. Verify the ProtectMe panel opens in TUI mode.
 3. Verify the one-box panel shows `CONFIGURATION` above `INFO`, the global config path, project trust path, effective mode, and global/project site counts.
-4. Open `Effective mode`, cancel once, then open it again and confirm a mode change; verify the panel stays open and returns to the top of `CONFIGURATION`.
-5. Open `Edit allow-list entry`, cancel once, then add a harmless host and confirm; verify counts refresh without closing the panel.
+4. Open `Effective mode`, cancel once, then open it again, choose project or global config in the confirmation, and confirm a mode change; verify the panel stays open and returns to the top of `CONFIGURATION`.
+5. Open `Edit allow-list entry`, cancel once, then add a harmless host, choose project or global config in the confirmation, and confirm; verify counts refresh without closing the panel.
 6. Open `Recent blocked hosts`; verify it appears inside the same box, then return to the main panel.
 7. Press `q` to close the panel.
 8. Ask the agent to run a harmless non-network URL literal command such as `echo https://example.invalid`; it should not be blocked because no supported request CLI is used.
@@ -50,7 +50,7 @@ Use this template when recording a real isolated Pi TUI smoke run. Keep screensh
 - Project trust state observed:
 - `/protectme` opened in TUI mode: yes/no
 - One-box configuration/info layout displayed: yes/no
-- In-panel mode confirmation and allow-list confirmation stayed open after changes: yes/no
+- In-panel mode confirmation and allow-list confirmation required a project/global save choice and stayed open after changes: yes/no
 - In-panel recent blocked hosts view displayed: yes/no
 - Agent non-network URL literal was not blocked: yes/no/not run
 - User `!echo https://example.invalid` was not blocked: yes/no/not run

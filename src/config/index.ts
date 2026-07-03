@@ -16,7 +16,9 @@ export {
   resolveMissingProtectMeConfig,
 } from "./config-defaults.ts";
 export {
+  ensureGlobalProtectMeConfig,
   loadProtectMeConfig,
+  loadProtectMeConfigWithGlobalDefault,
   mergeProtectMeConfigs,
   mutateGlobalProtectMeConfig,
   mutateProjectProtectMeConfig,
@@ -38,6 +40,7 @@ export {
   resolveProtectMeConfigPaths,
 } from "./config-paths.ts";
 export {
+  DEFAULT_PROTECTME_ALLOW_LIST,
   DEFAULT_PROTECTME_MODE,
   PROTECTME_CONFIG_SOURCES,
   PROTECTME_CONFIG_STATUSES,

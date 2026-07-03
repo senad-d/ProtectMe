@@ -1,12 +1,6 @@
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 
-import {
-  buildProtectMeConfigEditSourceError,
-  normalizeConfigAllowListEntry,
-  planProtectMeConfigAllowListAppend,
-  selectProtectMeConfigEditSource,
-  type ProtectMeMode,
-} from "../../config/index.ts";
+import { normalizeConfigAllowListEntry, type ProtectMeMode } from "../../config/index.ts";
 import { suggestCleanAllowListEntry } from "../../policy/index.ts";
 import { saveProtectMePanelAllowListEntry, saveProtectMePanelMode } from "./actions.ts";
 import {
@@ -26,9 +20,10 @@ import type {
 } from "./types.ts";
 
 const DEFAULT_WRITE_TARGET: ProtectMePanelWriteTarget = "project";
-const APPLY_MODE_VALUE = "apply-mode";
-const SAVE_ENTRY_VALUE = "save-entry";
+const SAVE_PROJECT_VALUE = "save-project";
+const SAVE_GLOBAL_VALUE = "save-global";
 const CANCEL_VALUE = "cancel";
+const CONFIRM_DIALOG_OPTION_COUNT = 3;
 
 type ProtectMePanelView = EntryConfirmView | EntryInputView | MainView | ModeConfirmView | RecentHostsView;
 
@@ -222,12 +217,6 @@ export class ProtectMePanelComponent {
   }
 
   private startModeConfirmation(): void {
-    const sourceError = this.readCurrentSourceError();
-    if (sourceError) {
-      this.setStatus(sourceError, "error");
-      return;
-    }
-
     this.statusMessage = undefined;
     this.view = {
       kind: "modeConfirm",
@@ -238,12 +227,6 @@ export class ProtectMePanelComponent {
   }
 
   private startEntryEditor(): void {
-    const sourceError = this.readCurrentSourceError();
-    if (sourceError) {
-      this.setStatus(sourceError, "error");
-      return;
-    }
-
     this.statusMessage = undefined;
     this.view = {
       kind: "entryInput",
@@ -258,62 +241,57 @@ export class ProtectMePanelComponent {
     this.invalidateAndRender();
   }
 
-  private readCurrentSourceError(): string | null {
-    const source = selectProtectMeConfigEditSource(this.state.config, this.writeTarget);
-
-    return buildProtectMeConfigEditSourceError(source);
-  }
-
   private moveDialogOption(view: EntryConfirmView | ModeConfirmView, delta: number): void {
-    view.selectedOptionIndex = clamp(view.selectedOptionIndex + delta, 0, 1);
+    view.selectedOptionIndex = clamp(view.selectedOptionIndex + delta, 0, CONFIRM_DIALOG_OPTION_COUNT - 1);
     this.invalidateAndRender();
   }
 
   private resolveModeConfirmation(view: ModeConfirmView): void {
-    if (view.selectedOptionIndex !== 0) {
+    const target = readConfirmDialogWriteTarget(view.selectedOptionIndex);
+    if (!target) {
       this.cancelToMain("Mode change cancelled.");
       return;
     }
 
-    this.saveModeChange(view.nextMode);
+    this.saveModeChange(target, view.nextMode);
   }
 
   private reviewEntryInput(view: EntryInputView): void {
-    const source = selectProtectMeConfigEditSource(this.state.config, this.writeTarget);
-    const appendPlan = planProtectMeConfigAllowListAppend(source, view.value);
-    if (!appendPlan.ok) {
-      this.setStatus(appendPlan.reason, "error");
+    const entry = normalizeConfigAllowListEntry(view.value);
+    if (!entry) {
+      this.setStatus(`Invalid allow-list entry: ${JSON.stringify(view.value)}`, "error");
       return;
     }
 
     this.statusMessage = undefined;
     this.view = {
       kind: "entryConfirm",
-      entry: appendPlan.entry,
+      entry,
       selectedOptionIndex: 0,
     };
     this.invalidateAndRender();
   }
 
   private resolveEntryConfirmation(view: EntryConfirmView): void {
-    if (view.selectedOptionIndex !== 0) {
+    const target = readConfirmDialogWriteTarget(view.selectedOptionIndex);
+    if (!target) {
       this.cancelToMain("Allow-list edit cancelled.");
       return;
     }
 
-    this.saveAllowListEntry(view.entry);
+    this.saveAllowListEntry(target, view.entry);
   }
 
-  private saveModeChange(nextMode: ProtectMeMode): void {
+  private saveModeChange(writeTarget: ProtectMePanelWriteTarget, nextMode: ProtectMeMode): void {
     if (!this.startSave()) return;
 
-    void this.performModeSave(nextMode);
+    void this.performModeSave(writeTarget, nextMode);
   }
 
-  private saveAllowListEntry(entry: string): void {
+  private saveAllowListEntry(writeTarget: ProtectMePanelWriteTarget, entry: string): void {
     if (!this.startSave()) return;
 
-    void this.performEntrySave(entry);
+    void this.performEntrySave(writeTarget, entry);
   }
 
   private startSave(): boolean {
@@ -329,18 +307,18 @@ export class ProtectMePanelComponent {
     return true;
   }
 
-  private async performModeSave(nextMode: ProtectMeMode): Promise<void> {
+  private async performModeSave(writeTarget: ProtectMePanelWriteTarget, nextMode: ProtectMeMode): Promise<void> {
     try {
-      const result = await saveProtectMePanelMode(this.writeTarget, this.state, this.actionDependencies!, nextMode);
+      const result = await saveProtectMePanelMode(writeTarget, this.state, this.actionDependencies!, nextMode);
       this.finishAction(result);
     } catch (error) {
       this.failAction(error);
     }
   }
 
-  private async performEntrySave(entry: string): Promise<void> {
+  private async performEntrySave(writeTarget: ProtectMePanelWriteTarget, entry: string): Promise<void> {
     try {
-      const result = await saveProtectMePanelAllowListEntry(this.writeTarget, this.state, this.actionDependencies!, entry);
+      const result = await saveProtectMePanelAllowListEntry(writeTarget, this.state, this.actionDependencies!, entry);
       this.finishAction(result);
     } catch (error) {
       this.failAction(error);
@@ -405,12 +383,13 @@ function buildModeConfirmDialog(view: ModeConfirmView, state: ProtectMePanelStat
   return {
     title: "Confirm mode change",
     lines: [
-      `Switch project mode from ${state.config.effective.mode} to ${view.nextMode}?`,
-      "Changes are saved only after confirmation.",
+      `Switch effective mode from ${state.config.effective.mode} to ${view.nextMode}?`,
+      "Choose the config file to save before confirmation.",
     ],
     footer: "↑↓ choose • Enter confirm • Esc cancel",
     options: [
-      { label: `Apply ${view.nextMode}`, value: APPLY_MODE_VALUE },
+      { label: `Save ${view.nextMode} to project config`, value: SAVE_PROJECT_VALUE },
+      { label: `Save ${view.nextMode} to global config`, value: SAVE_GLOBAL_VALUE },
       { label: "Cancel", value: CANCEL_VALUE },
     ],
     selectedOptionIndex: view.selectedOptionIndex,
@@ -420,7 +399,7 @@ function buildModeConfirmDialog(view: ModeConfirmView, state: ProtectMePanelStat
 function buildEntryInputDialog(view: EntryInputView): ProtectMePanelDialog {
   return {
     title: "Edit allow-list entry",
-    lines: ["Add a host to the project allow-list.", "Entry is normalized before saving."],
+    lines: ["Add a host to an allow-list.", "Entry is normalized before saving."],
     footer: "Type host • Enter review • Esc cancel",
     input: view.value,
     inputLabel: "Host",
@@ -430,10 +409,11 @@ function buildEntryInputDialog(view: EntryInputView): ProtectMePanelDialog {
 function buildEntryConfirmDialog(view: EntryConfirmView): ProtectMePanelDialog {
   return {
     title: "Confirm allow-list entry",
-    lines: [`Save ${view.entry} to the project allow-list?`, "No file is changed until you confirm."],
+    lines: [`Save ${view.entry} to which allow-list?`, "No file is changed until you choose a config and confirm."],
     footer: "↑↓ choose • Enter confirm • Esc cancel",
     options: [
-      { label: `Save ${view.entry}`, value: SAVE_ENTRY_VALUE },
+      { label: `Save ${view.entry} to project config`, value: SAVE_PROJECT_VALUE },
+      { label: `Save ${view.entry} to global config`, value: SAVE_GLOBAL_VALUE },
       { label: "Cancel", value: CANCEL_VALUE },
     ],
     selectedOptionIndex: view.selectedOptionIndex,
@@ -446,6 +426,13 @@ function buildRecentHostsDialog(state: ProtectMePanelState): ProtectMePanelDialo
     lines: buildRecentHostLines(state.recentBlockedHosts),
     footer: "Enter/Esc back • q quit",
   };
+}
+
+function readConfirmDialogWriteTarget(selectedOptionIndex: number): ProtectMePanelWriteTarget | null {
+  if (selectedOptionIndex === 0) return "project";
+  if (selectedOptionIndex === 1) return "global";
+
+  return null;
 }
 
 function buildRecentHostLines(hosts: string[]): string[] {

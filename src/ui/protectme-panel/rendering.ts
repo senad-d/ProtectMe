@@ -49,7 +49,7 @@ export function renderProtectMePanelDialog(
 
 export function buildProtectMePanelSettings(
   state: ProtectMePanelState,
-  writeTarget: ProtectMePanelWriteTarget,
+  _writeTarget: ProtectMePanelWriteTarget,
 ): ProtectMePanelSetting[] {
   const config = state.config;
 
@@ -57,14 +57,14 @@ export function buildProtectMePanelSettings(
     {
       label: "Effective mode",
       value: config.effective.mode,
-      description: `Enter toggles ${writeTarget} mode between block and allow.`,
+      description: "Enter chooses a config file and toggles mode between block and allow.",
       kind: "mode",
       action: "toggleMode",
     },
     {
       label: "Edit allow-list entry",
       value: "",
-      description: `Enter opens an editable ${writeTarget} allow-list entry flow.`,
+      description: "Enter opens an editable allow-list entry flow and asks where to save.",
       kind: "action",
       action: "addEntry",
     },

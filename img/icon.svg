@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" shape-rendering="geometricPrecision">
+  <defs>
+    <radialGradient id="bg" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(256 256) rotate(90) scale(315)">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="0.62" stop-color="#070C16"/>
+      <stop offset="1" stop-color="#010409"/>
+    </radialGradient>
+    <linearGradient id="hex" x1="108" y1="404" x2="404" y2="108" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0D9488"/>
+      <stop offset="0.48" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#7C3AED"/>
+    </linearGradient>
+    <linearGradient id="grid" x1="154" y1="352" x2="358" y2="148" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A7F3D0"/>
+      <stop offset="1" stop-color="#93C5FD"/>
+    </linearGradient>
+    <linearGradient id="lock" x1="194" y1="350" x2="318" y2="238" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#15803D"/>
+      <stop offset="1" stop-color="#06B6D4"/>
+    </linearGradient>
+    <clipPath id="globeClip">
+      <circle cx="256" cy="246" r="102"/>
+    </clipPath>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <path d="M256 72L394 152V360L256 440L118 360V152L256 72Z" fill="#020617" stroke="url(#hex)" stroke-width="16" stroke-linejoin="round"/>
+  <path d="M256 102L367 166V346L256 410L145 346V166L256 102Z" fill="none" stroke="#38BDF8" stroke-width="8" stroke-linejoin="round" opacity="0.36"/>
+  <circle cx="256" cy="246" r="122" fill="#030712" stroke="#1E40AF" stroke-width="10"/>
+  <g clip-path="url(#globeClip)" fill="none" stroke="url(#grid)" stroke-width="10" opacity="0.9">
+    <ellipse cx="256" cy="246" rx="43" ry="102"/>
+    <ellipse cx="256" cy="246" rx="80" ry="102"/>
+    <ellipse cx="256" cy="246" rx="102" ry="41"/>
+    <ellipse cx="256" cy="246" rx="102" ry="74"/>
+  </g>
+  <circle cx="256" cy="246" r="122" fill="none" stroke="#67E8F9" stroke-width="6" opacity="0.52"/>
+  <path fill="#D1FAE5" fill-rule="evenodd" d="M216 266H239V232C239 209 247 192 256 192C265 192 273 209 273 232V266H296V232C296 194 279 170 256 170C233 170 216 194 216 232V266Z"/>
+  <rect x="192" y="255" width="128" height="94" rx="27" fill="url(#lock)"/>
+  <circle cx="256" cy="299" r="11" fill="#04130C"/>
+  <rect x="251" y="309" width="10" height="23" rx="5" fill="#04130C"/>
+</svg>

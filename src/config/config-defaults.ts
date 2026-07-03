@@ -1,5 +1,6 @@
 import type { ProtectMeConfigPaths } from "./config-paths.ts";
 import {
+  DEFAULT_PROTECTME_ALLOW_LIST,
   DEFAULT_PROTECTME_MODE,
   type EffectiveProtectMeConfig,
   type ParsedProtectMeConfig,
@@ -21,7 +22,7 @@ export function createDefaultEffectiveProtectMeConfig(
 ): EffectiveProtectMeConfig {
   return {
     mode: DEFAULT_PROTECTME_MODE,
-    allowList: [],
+    allowList: [...DEFAULT_PROTECTME_ALLOW_LIST],
     modeSource: "default",
     allowListSources: [],
     configSources,

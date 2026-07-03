@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mergeProtectMeConfigs } from "../src/config/index.ts";
+import { DEFAULT_PROTECTME_ALLOW_LIST, mergeProtectMeConfigs } from "../src/config/index.ts";
 import { PROTECTME_COMMAND_NAME } from "../src/constants.ts";
 import {
   createDefaultNetworkGuardDependencies,
@@ -15,6 +15,7 @@ import { registerProtectMeCommand } from "../src/ui/protectme-panel.ts";
 const cwd = "/workspace/project";
 const homeDir = "/home/user";
 const agentDir = `${homeDir}/.pi/agent`;
+const starterStatusText = `🌐 (${DEFAULT_PROTECTME_ALLOW_LIST.length} sites)`;
 const plainTheme = {
   fg(_role, text) {
     return text;
@@ -43,9 +44,9 @@ test("Pi-context lifecycle integration resets status and attempts on reload-like
     [1, 2, 1],
   );
   assert.deepEqual(ctx.ui.statusCalls, [
-    { key: "protectme", text: "🌐 (0 sites)" },
+    { key: "protectme", text: starterStatusText },
     { key: "protectme", text: undefined },
-    { key: "protectme", text: "🌐 (0 sites)" },
+    { key: "protectme", text: starterStatusText },
   ]);
   assert.equal(harness.pi.userMessages.length, 0);
   assert.equal(harness.pi.messages.length, 2);
@@ -66,7 +67,7 @@ test("Pi-context trust integration passes untrusted state through event and comm
     { cwd, homeDir, agentDir, projectTrusted: false },
     { cwd, homeDir, agentDir, projectTrusted: false },
   ]);
-  assert.equal(ctx.ui.statusCalls[0].text, "🌐 (0 sites) · project config ignored");
+  assert.equal(ctx.ui.statusCalls[0].text, `${starterStatusText} · project config ignored`);
   assert.match(ctx.ui.notifications[0].message, /project config ignored/u);
   assert.equal(ctx.ui.customCalls.length, 1);
   assert.equal(ctx.ui.renderedLines.some((line) => line.includes("project config ignored")), true);

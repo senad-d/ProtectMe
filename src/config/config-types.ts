@@ -2,6 +2,16 @@ export const PROTECTME_MODES = ["block", "allow"] as const;
 export const PROTECTME_CONFIG_SOURCES = ["global", "project"] as const;
 export const PROTECTME_CONFIG_STATUSES = ["missing", "valid", "invalid", "unreadable", "ignored"] as const;
 export const DEFAULT_PROTECTME_MODE: ProtectMeMode = "block";
+export const DEFAULT_PROTECTME_ALLOW_LIST = [
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "pi.dev",
+  "github.com",
+  "npmjs.com",
+  "registry.npmjs.org",
+  "nodejs.org",
+] as const;
 
 export type ProtectMeMode = (typeof PROTECTME_MODES)[number];
 export type ProtectMeConfigSource = (typeof PROTECTME_CONFIG_SOURCES)[number];
@@ -55,6 +65,6 @@ export interface ProtectMeConfigLoadResult {
 export function createDefaultProtectMeConfig(): ProtectMeConfig {
   return {
     mode: DEFAULT_PROTECTME_MODE,
-    allowList: [],
+    allowList: [...DEFAULT_PROTECTME_ALLOW_LIST],
   };
 }

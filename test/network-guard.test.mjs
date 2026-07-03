@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { DEFAULT_PROTECTME_ALLOW_LIST } from "../src/config/index.ts";
 import {
   buildProtectMeConfigWarningMessage,
   createDefaultNetworkGuardDependencies,
@@ -20,6 +21,7 @@ import { buildBlockedAttemptLogEntry } from "../src/logging/blocked-attempt-log.
 const cwd = "/workspace/project";
 const homeDir = "/home/user";
 const agentDir = `${homeDir}/.pi/agent`;
+const starterStatusText = `🌐 (${DEFAULT_PROTECTME_ALLOW_LIST.length} sites)`;
 const promptErrorNotification = [
   "ProtectMe blocked this repeated network request because the confirmation prompt failed.",
   "No config was changed; update the allow list manually before retrying.",
@@ -36,7 +38,7 @@ test("session start resets attempts, loads config, sets status, and shows warnin
 
   assert.equal(state.blockedHostAttempts.size, 0);
   assert.equal(fake.loadCalls, 1);
-  assert.deepEqual(ctx.ui.statusCalls, [{ key: "protectme", text: "🌐 (2 sites)" }]);
+  assert.deepEqual(ctx.ui.statusCalls, [{ key: "protectme", text: `🌐 (${DEFAULT_PROTECTME_ALLOW_LIST.length + 2} sites)` }]);
   assert.deepEqual(ctx.ui.notifications, [
     {
       message: 'ProtectMe config warning: project allowList entry ignored ("bad host"): invalid host',
@@ -395,7 +397,7 @@ test("untrusted project config is visible as ignored and does not disable blocki
     { cwd, homeDir, agentDir, projectTrusted: false },
     { cwd, homeDir, agentDir, projectTrusted: false },
   ]);
-  assert.equal(ctx.ui.statusCalls[0].text, "🌐 (0 sites) · project config ignored");
+  assert.equal(ctx.ui.statusCalls[0].text, `${starterStatusText} · project config ignored`);
   assert.match(ctx.ui.notifications[0].message, /project config ignored/u);
   assert.deepEqual(result, {
     block: true,
@@ -405,13 +407,13 @@ test("untrusted project config is visible as ignored and does not disable blocki
   assert.equal(fake.loggedAttempts.length, 1);
 });
 
-test("untrusted project config cannot be used for repeated-attempt allow-list writes", async () => {
+test("untrusted project repeated-attempt writes only offer writable global target", async () => {
   const state = createNetworkGuardState();
   const fake = createFakeDependencies(buildUntrustedProjectIgnoredConfigResult());
   const ctx = createFakeContext({
     hasUI: true,
     projectTrusted: false,
-    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addProject],
+    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.editConfig, PROTECTME_CONFIG_CONFIRM_CHOICES.saveGlobalAndAllow],
     editorValues: ["project-only.example.com"],
   });
   const event = { toolName: "bash", input: { command: "curl https://project-only.example.com" } };
@@ -419,19 +421,20 @@ test("untrusted project config cannot be used for repeated-attempt allow-list wr
   await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
   const result = await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
 
-  assert.deepEqual(result, {
-    block: true,
-    reason: "ProtectMe kept blocking network request to project-only.example.com. The user did not approve this call.",
-  });
+  assert.equal(result, undefined);
   assert.deepEqual(fake.loadInputs, [
     { cwd, homeDir, agentDir, projectTrusted: false },
     { cwd, homeDir, agentDir, projectTrusted: false },
   ]);
-  assert.equal(ctx.ui.selectCalls.length, 1);
-  assert.equal(ctx.ui.editorCalls.length, 0);
+  assert.equal(ctx.ui.selectCalls.length, 2);
+  assert.deepEqual(ctx.ui.selectCalls[1].options, [PROTECTME_CONFIG_CONFIRM_CHOICES.saveGlobalAndAllow, PROTECTME_CONFIG_CONFIRM_CHOICES.cancel]);
+  assert.equal(ctx.ui.editorCalls.length, 1);
   assert.equal(fake.projectWrites.length, 0);
-  assert.match(ctx.ui.notifications[0].message, /project config is ignored/u);
-  assert.equal(fake.loggedAttempts.at(-1).outcome, "prompt_denied");
+  assert.deepEqual(fake.globalWrites.at(-1), {
+    paths: { globalConfigPath: `${agentDir}/protectme.json` },
+    config: { mode: "block", allowList: ["project-only.example.com"] },
+  });
+  assert.equal(fake.loggedAttempts.length, 1);
 });
 
 test("non-bash and non-network bash inputs are ignored", async () => {
@@ -509,7 +512,7 @@ test("second blocked attempt can add project config and allow the current call",
   const fake = createFakeDependencies(buildConfigResult());
   const ctx = createFakeContext({
     hasUI: true,
-    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addProject, PROTECTME_CONFIG_CONFIRM_CHOICES.saveAndAllow],
+    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.editConfig, PROTECTME_CONFIG_CONFIRM_CHOICES.saveProjectAndAllow],
     editorValues: ["https://Example.com/login"],
   });
   const event = { toolName: "bash", input: { command: "curl https://api.example.com/v1" } };
@@ -537,7 +540,7 @@ test("second blocked attempt preserves existing project mode while appending an 
   const fake = createFakeDependencies(buildProjectBlockConfigResult());
   const ctx = createFakeContext({
     hasUI: true,
-    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addProject, PROTECTME_CONFIG_CONFIRM_CHOICES.saveAndAllow],
+    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.editConfig, PROTECTME_CONFIG_CONFIRM_CHOICES.saveProjectAndAllow],
     editorValues: ["api.example.com"],
   });
   const event = { toolName: "bash", input: { command: "curl https://api.example.com/v1" } };
@@ -560,7 +563,7 @@ test("second blocked attempt can add global config and allow the current call", 
   const fake = createFakeDependencies(buildConfigResult());
   const ctx = createFakeContext({
     hasUI: true,
-    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addGlobal, PROTECTME_CONFIG_CONFIRM_CHOICES.saveAndAllow],
+    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.editConfig, PROTECTME_CONFIG_CONFIRM_CHOICES.saveGlobalAndAllow],
     editorValues: ["Global.example"],
   });
   const event = { toolName: "bash", input: { command: "wget https://downloads.example.com/file" } };
@@ -588,7 +591,7 @@ test("cancelled config-write confirmation fails closed without saving", async ()
   const fake = createFakeDependencies(buildConfigResult());
   const ctx = createFakeContext({
     hasUI: true,
-    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addProject, PROTECTME_CONFIG_CONFIRM_CHOICES.cancel],
+    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.editConfig, PROTECTME_CONFIG_CONFIRM_CHOICES.cancel],
     editorValues: ["example.com"],
   });
   const event = { toolName: "bash", input: { command: "curl https://example.com" } };
@@ -657,7 +660,7 @@ test("rejected allow-list editor prompt fails closed without config writes", asy
   const promptSecret = "editor-secret-token";
   const ctx = createFakeContext({
     hasUI: true,
-    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addProject],
+    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.editConfig],
     editorErrors: [new Error(promptSecret)],
   });
   const event = { toolName: "bash", input: { command: "curl https://example.com" } };
@@ -913,7 +916,7 @@ function buildProjectAllowOverGlobalBlockConfigResult() {
       ...base.effective,
       mode: "allow",
       modeSource: "project",
-      allowList: ["blocked.example"],
+      allowList: [...DEFAULT_PROTECTME_ALLOW_LIST, "blocked.example"],
       allowListSources: ["global"],
       configSources: [globalConfig, projectConfig],
     },
@@ -935,7 +938,7 @@ function buildProjectBlockConfigResult() {
       ...base.effective,
       mode: "block",
       modeSource: "project",
-      allowList: ["existing.example.com"],
+      allowList: [...DEFAULT_PROTECTME_ALLOW_LIST, "existing.example.com"],
       allowListSources: ["project"],
       configSources: [base.globalConfig, projectConfig],
     },
@@ -1024,7 +1027,7 @@ function buildUntrustedProjectIgnoredConfigResult() {
       ...base.effective,
       mode: "block",
       modeSource: "global",
-      allowList: [],
+      allowList: [...DEFAULT_PROTECTME_ALLOW_LIST],
       allowListSources: [],
       configSources: [globalConfig, projectConfig],
     },
@@ -1033,7 +1036,7 @@ function buildUntrustedProjectIgnoredConfigResult() {
 
 function buildConfigResult(options = {}) {
   const mode = options.mode ?? "block";
-  const allowList = options.allowList ?? [];
+  const allowList = [...DEFAULT_PROTECTME_ALLOW_LIST, ...(options.allowList ?? [])];
   const paths = {
     cwd,
     homeDir,
@@ -1063,7 +1066,7 @@ function buildConfigResult(options = {}) {
       mode,
       allowList,
       modeSource: mode === "block" ? "default" : "project",
-      allowListSources: allowList.length > 0 ? ["project"] : [],
+      allowListSources: (options.allowList ?? []).length > 0 ? ["project"] : [],
       configSources: [globalConfig, projectConfig],
       warnings: options.warnings ?? [],
     },

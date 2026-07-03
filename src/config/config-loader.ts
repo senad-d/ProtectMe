@@ -5,7 +5,9 @@ import { normalizeAllowListEntries } from "../policy/host-matcher.ts";
 import { normalizeHostInput } from "../policy/host-normalization.ts";
 import { resolveProtectMeConfigPaths, type ProtectMeConfigPathInput, type ProtectMeConfigPaths } from "./config-paths.ts";
 import {
+  DEFAULT_PROTECTME_ALLOW_LIST,
   DEFAULT_PROTECTME_MODE,
+  createDefaultProtectMeConfig,
   type EffectiveProtectMeConfig,
   type ParsedProtectMeConfig,
   type ProtectMeConfigFile,
@@ -95,6 +97,29 @@ export async function loadProtectMeConfig(input: ProtectMeConfigPathInput | Prot
     projectConfig,
     effective: mergeProtectMeConfigs(globalConfig, projectConfig),
   };
+}
+
+export async function loadProtectMeConfigWithGlobalDefault(
+  input: ProtectMeConfigPathInput | ProtectMeConfigPaths,
+): Promise<ProtectMeConfigLoadResult> {
+  const paths = "globalConfigPath" in input ? input : resolveProtectMeConfigPaths(input);
+
+  try {
+    await ensureGlobalProtectMeConfig(paths);
+  } catch (error) {
+    const config = await loadProtectMeConfig(input);
+
+    return appendGlobalConfigInitializationWarning(config, error);
+  }
+
+  return loadProtectMeConfig(input);
+}
+
+export async function ensureGlobalProtectMeConfig(
+  paths: Pick<ProtectMeConfigPaths, "globalConfigPath">,
+  defaultConfig: ProtectMeConfigFile = createDefaultProtectMeConfig(),
+): Promise<boolean> {
+  return enqueueConfigMutation(paths.globalConfigPath, () => ensureProtectMeConfigFileUnlocked("global", paths.globalConfigPath, defaultConfig));
 }
 
 export async function writeProtectMeConfigFile(path: string, config: ProtectMeConfigFile): Promise<void> {
@@ -324,10 +349,10 @@ function mergeAllowListEntries(
   globalConfig: ParsedProtectMeConfig,
   projectConfig: ParsedProtectMeConfig,
 ): AllowListMergeResult {
-  const allowList: string[] = [];
+  const defaultAllowList = normalizeAllowListEntries([...DEFAULT_PROTECTME_ALLOW_LIST]);
+  const allowList: string[] = [...defaultAllowList.entries];
   const allowListSources: ProtectMeConfigSource[] = [];
-  const seenEntries = new Set<string>();
-
+  const seenEntries = new Set<string>(allowList);
   const warnings: string[] = [];
 
   appendAllowListEntries(globalConfig, allowList, allowListSources, seenEntries, warnings);
@@ -396,6 +421,19 @@ async function mutateProtectMeConfigFileUnlocked(
   return nextConfig;
 }
 
+async function ensureProtectMeConfigFileUnlocked(
+  source: ProtectMeConfigSource,
+  path: string,
+  defaultConfig: ProtectMeConfigFile,
+): Promise<boolean> {
+  const currentSource = await readProtectMeConfigSource(source, path);
+  if (currentSource.status !== "missing") return false;
+
+  await writeProtectMeConfigFileUnlocked(path, defaultConfig);
+
+  return true;
+}
+
 async function enqueueConfigMutation<T>(path: string, operation: () => Promise<T>): Promise<T> {
   const previousOperation = configMutationQueues.get(path) ?? Promise.resolve();
   const nextOperation = previousOperation.then(operation, operation);
@@ -419,6 +457,19 @@ function assertConfigSourceCanMutate(configSource: ParsedProtectMeConfig): void 
 
 function ignoreQueueResult(): void {
   // Keep the queue chain alive after either success or failure.
+}
+
+function appendGlobalConfigInitializationWarning(
+  config: ProtectMeConfigLoadResult,
+  error: unknown,
+): ProtectMeConfigLoadResult {
+  return {
+    ...config,
+    effective: {
+      ...config.effective,
+      warnings: [...config.effective.warnings, `global config initialization failed: ${buildReadErrorMessage(error)}`],
+    },
+  };
 }
 
 function buildTemporaryConfigPath(path: string): string {

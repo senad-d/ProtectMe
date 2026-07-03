@@ -14,7 +14,7 @@ Pi agents frequently use tools such as `bash`, `read`, `write`, and `edit`. Prot
 ## Solution Approach
 ProtectMe will subscribe to Pi lifecycle and `tool_call` events. It will only evaluate `bash` tool calls and only when the command invokes one of the configured request-making CLIs for v1: `curl`, `wget`, `http`, or `https`. It will load a global config first, append project config entries, calculate an effective policy, and block requests when the effective mode is `block` and the host is not matched by the effective `allowList`.
 
-On first block for a host in a session, ProtectMe will block the tool call, log the attempt, and return/queue guidance for the agent explaining why the request was blocked and how to continue. On the second blocked attempt for the same host, ProtectMe will prompt the user when UI is available with choices to allow once, add to project config, add to global config, or keep blocked.
+On first block for a host in a session, ProtectMe will block the tool call, log the attempt, and return/queue guidance for the agent explaining why the request was blocked and how to continue. On the second blocked attempt for the same host, ProtectMe will prompt the user when UI is available with choices to allow once, edit an allow-list entry and choose project/global config in the final save confirmation, or keep blocked.
 
 ## Relevant Files
 
@@ -65,17 +65,19 @@ Use JSON with exactly the user-facing terms `mode` and `allowList`.
 Rules:
 - `mode: "block"` means ProtectMe is active. Detected network requests are blocked unless the host matches `allowList`.
 - `mode: "allow"` means ProtectMe is effectively disabled. Detected requests are allowed and no block prompts are shown.
-- Missing config defaults to `mode: "block"` and an empty `allowList`.
-- Invalid config fails closed as `mode: "block"` with an empty project contribution and a visible warning.
+- Missing global config is initialized automatically with `mode: "block"` and the built-in starter allow list: `localhost`, `127.0.0.1`, `::1`, `pi.dev`, `github.com`, `npmjs.com`, `registry.npmjs.org`, and `nodejs.org`; missing project config falls back to the same built-in starter policy.
+- Invalid config fails closed as `mode: "block"` with an empty effective allow list and a visible warning.
 - Unknown keys are ignored but preserved only when safe write-back behavior is implemented.
 
 ### Config locations and merge order
 - Global config: `~/.pi/agent/protectme.json`.
 - Project config: `.pi/protectme.json` under `ctx.cwd`.
-- Global config loads first.
+- A missing global config is initialized automatically with the built-in default config.
+- Built-in starter entries load first.
+- Global config appends additional `allowList` entries.
 - Project config appends additional `allowList` entries when the project is trusted.
 - Effective `mode` is project `mode` when present, otherwise global `mode`, otherwise `block`.
-- Effective `allowList` is normalized global entries followed by normalized project entries, with duplicates removed.
+- Effective `allowList` is normalized starter entries followed by normalized global entries and normalized project entries, with duplicates removed.
 
 ### Host matching
 - Request hosts are normalized to lowercase, stripped of trailing dots, and matched as hosts only.
@@ -91,6 +93,7 @@ Rules:
   - deeper child subdomains such as `v2.api.example2.com`
 - Entry `api.example2.com` does not allow parent `example2.com`.
 - Localhost and IP hosts are supported as exact entries; child-subdomain matching applies only to DNS names.
+- Add local subdomains such as `app.localhost` explicitly when a local test workflow uses them.
 
 ### Suggested entry cleanup
 When prompting the user after a repeated block:
@@ -98,7 +101,7 @@ When prompting the user after a repeated block:
 - Offer a clean editable default entry.
 - Prefer the registrable/base domain when it can be safely detected.
 - Fall back to the exact host for IP addresses, localhost, single-label internal hosts, and parsing failures.
-- Let the user edit the entry before adding it to global or project config.
+- Let the user edit the entry before choosing the global or project config in the final save confirmation.
 
 Use `tldts` or an equivalent maintained domain parser for registrable-domain suggestions, with a deterministic fallback to the normalized host.
 
@@ -141,9 +144,13 @@ When a detected request host is not allowed and effective `mode` is `block`:
 
 Prompt choices:
 - Allow once.
-- Add to project config and allow this call.
-- Add to global config and allow this call.
+- Edit allow-list entry and choose config before saving.
 - Keep blocked.
+
+Save confirmation choices:
+- Save to project config and allow this call.
+- Save to global config and allow this call.
+- Cancel without saving.
 
 Non-UI behavior:
 - No prompt is possible.

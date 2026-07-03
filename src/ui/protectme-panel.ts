@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { getAgentDir as getPiAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import {
-  loadProtectMeConfig,
+  loadProtectMeConfigWithGlobalDefault,
   mutateGlobalProtectMeConfig,
   mutateProjectProtectMeConfig,
   type ProtectMeConfigPathInput,
@@ -57,7 +57,7 @@ export function createDefaultProtectMeCommandDependencies(): ProtectMeCommandDep
   return {
     getHomeDir: homedir,
     getAgentDir: getPiAgentDir,
-    loadConfig: loadProtectMeConfig,
+    loadConfig: loadProtectMeConfigWithGlobalDefault,
     readRecentBlockedHosts,
     mutateProjectConfig: mutateProjectProtectMeConfig,
     mutateGlobalConfig: mutateGlobalProtectMeConfig,

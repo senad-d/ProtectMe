@@ -1,52 +1,115 @@
-# ProtectMe
+<p align="center">
+  <img alt="ProtectMe logo" src="img/icon.svg" width="128">
+</p>
 
-ProtectMe is a Pi extension that guards Pi agent and direct user bash network access by checking supported shell-network requests against global and project allow lists.
+<p align="center">
+  <a href="https://pi.dev"><img alt="pi package" src="https://img.shields.io/badge/pi-package-6f42c1?style=flat-square" /></a>
+  <a href="https://www.npmjs.com/package/@senad-d/protectme"><img alt="npm" src="https://img.shields.io/npm/v/%40senad-d%2Fprotectme?style=flat-square" /></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=senad-d_ProtectMe"><img alt="Quality Gate Status" src="https://sonarcloud.io/api/project_badges/measure?project=senad-d_ProtectMe&metric=alert_status" /></a>
+</p>
 
-## What ProtectMe guards
+<p align="center">
+  Network access guardrails for <a href="https://pi.dev">pi</a>.
+  <br />Let agents and direct Pi bash commands reach only approved network destinations from the terminal.
+</p>
 
-ProtectMe inspects both LLM `bash` tool calls and Pi user bash commands typed with `!` or `!!` for supported request-making CLIs:
+---
 
-- `curl`
-- `wget`
-- `http`
-- `https`
+ProtectMe is a Pi extension for coding agents. It guards supported shell-network requests made by Pi agents or direct `!`/`!!` user bash commands, checks destinations against global and project allow lists, and blocks disallowed hosts before execution.
 
-It intentionally ignores raw URL text when no supported request CLI is present, and it does not parse `read`, `write`, `edit`, or other file/content tool inputs just because they contain URLs. Shell commands run outside Pi, or through CLIs not listed above, are outside ProtectMe's v1 guard boundary.
+<table align="center">
+  <tr>
+    <th>ProtectMe demo</th>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="img/demo.gif" alt="ProtectMe demo: inspect and edit network guard configuration inside pi" title="ProtectMe demo" width="760">
+    </td>
+  </tr>
+</table>
 
-ProtectMe also inspects approved non-network wrappers such as `sudo`, `env`, `time`, `timeout`, and `nice` when they launch a supported request CLI. URL-bearing proxy/resolver options are guarded as additional destinations. Static option sources that can hide network destinations, such as `curl --config` or `wget --input-file`, fail closed because ProtectMe cannot inspect those files safely before execution.
+- **Network guard boundary:** covers supported `curl`, `wget`, `http`, and `https` invocations from Pi agent `bash` calls and Pi user bash commands.
+- **Allow-list policy:** default `block` mode permits a small developer starter list and denies other unknown hosts; `allow` mode is available as an explicit temporary bypass.
+- **Project-aware configuration:** trusted project config can extend global allow lists and override mode.
+- **Prompted approvals:** repeated blocked hosts can be allowed once or added to a user-selected project/global config when Pi UI confirmation is available.
+- **Secret-aware logging:** blocked-attempt logs are local, bounded, and redact common credential-bearing command fragments.
 
-ProtectMe itself does not make network calls, does not require credentials, and does not send telemetry.
+> **Security:** pi packages run with your full system permissions. ProtectMe is a guardrail for supported Pi command flows, not a sandbox, firewall, or proxy. Read [`SECURITY.md`](SECURITY.md).
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Commands and Tools](#commands-and-tools)
+- [Troubleshooting](#troubleshooting)
+- [Development and Validation](#development-and-validation)
+- [Update and Uninstall](#update-and-uninstall)
+- [Publishing](#publishing)
+- [License](#license)
+
+---
+
+## Quick Start
+
+```bash
+pi install npm:@senad-d/protectme
+```
+
+Review the built-in starter allow list and add any narrow project-specific hosts as shown in [Configuration](#configuration), then start pi:
+
+```bash
+pi
+```
+
+Open the ProtectMe panel:
+
+```text
+/protectme
+```
+
+Try a guarded request through Pi:
+
+```text
+Ask the agent to run curl https://example.com only if ProtectMe allows the host; otherwise explain the block.
+```
+
+ProtectMe guards supported request-making shell commands. It does not run scanners, make network calls itself, or require API credentials.
+
+---
 
 ## Installation
 
-Install the extension with Pi from npm or GitHub:
+| Scope | Command | Notes |
+| --- | --- | --- |
+| Global | `pi install npm:@senad-d/protectme` | Loads in every trusted pi project. |
+| Project-local | `pi install npm:@senad-d/protectme -l` | Writes to `.pi/settings.json` in the current project. |
+| One run | `pi -e npm:@senad-d/protectme` | Try without changing settings. |
+| Git | `pi install git:github.com/senad-d/ProtectMe@<tag>` | Pin a tag or commit. |
+| Local checkout | `pi --no-extensions -e .` | Develop or smoke-test this repository in isolation. |
+
+Source checkout:
 
 ```bash
-pi install npm:@senad-d/protectme@<version>
-pi install git:github.com/senad-d/pi-protectme@<tag>
-```
-
-For local development in this repository:
-
-```bash
-npm install
+git clone https://github.com/senad-d/ProtectMe.git
+cd ProtectMe
+npm ci
+npm run validate
 pi --no-extensions -e .
 ```
 
-Use `--no-extensions -e .` for isolated smoke testing so unrelated installed extensions cannot affect behavior.
+---
 
 ## Configuration
 
-ProtectMe reads two JSON config files:
+ProtectMe reads JSON config from global and project-local files. It does not require secrets. On runtime load, it creates a missing global config at `~/.pi/agent/protectme.json` with the built-in defaults; project config is still only written when you explicitly confirm a `/protectme` edit or repeated-block prompt.
 
-| Scope | Path |
-| --- | --- |
-| Global | `~/.pi/agent/protectme.json` |
-| Project | `.pi/protectme.json` |
-
-These are the default Pi paths. ProtectMe uses Pi's configured project config directory name (default `.pi`) for project-local files and Pi's agent config directory for the global file, so `PI_CODING_AGENT_DIR` moves the global ProtectMe config in standard Pi installations.
-
-Project config is honored only when Pi reports the current project as trusted. In untrusted projects, ProtectMe does not read `.pi/protectme.json` and reports the project config as ignored.
+| Scope | Path | Notes |
+| --- | --- | --- |
+| Global | `~/.pi/agent/protectme.json` | Applies across projects. `PI_CODING_AGENT_DIR` moves this path in standard Pi installations. |
+| Project | `.pi/protectme.json` | Applies only when Pi reports the project as trusted. |
+| Block log | `.pi/agent/protectme_log.jsonl` | Append-only local log for blocked attempts. Allowed requests are not logged. |
 
 Schema:
 
@@ -59,138 +122,153 @@ Schema:
 
 Fields:
 
-- `mode`: optional, either `"block"` or `"allow"`.
-- `allowList`: optional array of host entries.
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `mode` | No | `"block"` blocks disallowed hosts. `"allow"` permits detected requests without prompts or blocked-attempt logs. |
+| `allowList` | No | Host entries allowed in `block` mode. Entries are normalized and deduplicated. |
 
-Mode behavior:
-
-- `"block"`: ProtectMe blocks detected network requests unless the destination host matches the effective `allowList`.
-- `"allow"`: ProtectMe allows detected requests without prompts or blocked-attempt logs.
-
-Missing config defaults to:
+A missing global config is initialized automatically with `mode: "block"` and this built-in starter allow list:
 
 ```json
 {
   "mode": "block",
-  "allowList": []
+  "allowList": [
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "pi.dev",
+    "github.com",
+    "npmjs.com",
+    "registry.npmjs.org",
+    "nodejs.org"
+  ]
 }
 ```
 
-### Merge behavior
+Resolution order:
 
-- Global config loads first.
+- Built-in starter entries load first.
+- Global config appends additional `allowList` entries.
 - Trusted project config appends additional `allowList` entries.
 - Trusted project `mode` overrides global `mode` when present.
 - Untrusted project config is ignored without reading project-local contents.
-- Otherwise global `mode` applies.
-- Otherwise mode defaults to `"block"`.
-- Entries are normalized and deduplicated in the effective config.
-- If any loaded global or trusted-project config is invalid or unreadable, the entire effective config fails closed with `mode: "block"` and an empty `allowList`.
-- Missing config and ignored untrusted-project config do not force fail-closed behavior.
+- Invalid or unreadable loaded config fails closed with `mode: "block"` and an empty effective allow list.
 
-## Host matching rules
+Host matching rules:
 
-Allow-list entries are normalized by removing schemes, paths, query strings, fragments, ports, trailing dots, and case differences.
-
-Examples:
-
-- `example.com` allows `example.com`, `example.com/login`, `api.example.com`, and deeper child subdomains.
+- `example.com` allows `example.com`, paths on that host, and child subdomains such as `api.example.com`.
 - `api.example2.com` allows itself and child subdomains, but not parent domain `example2.com`.
-- Public suffix entries such as `com` or `co.uk` are ignored and reported as config warnings.
-- Single-label non-localhost entries such as `internal-service` match only that exact host, not `api.internal-service`.
-- `localhost`, IPv4, and IPv6 entries match exactly.
-- Invalid entries are ignored and reported as config warnings.
+- Public suffix entries such as `com` or `co.uk` are ignored and reported as warnings.
+- Single-label non-localhost entries such as `internal-service` match only that exact host.
+- `localhost`, IPv4, and IPv6 entries match exactly, including ports such as `localhost:3000`.
+- Local subdomains such as `app.localhost` are not covered by `localhost`; add `app.localhost` or another exact local hostname to your project allow list when needed.
 
-## Blocking and prompts
+Blocked-attempt log retention:
 
-When effective mode is `"block"`:
+- `.pi/agent/protectme_log.jsonl` is append-only local state for blocked attempts.
+- ProtectMe reads recent entries with a bounded tail window and does not compact, upload, or delete the log.
+- Delete or truncate `.pi/agent/protectme_log.jsonl` if you want to clear local history.
 
-1. The first detected request to a disallowed host is blocked. The Pi session is not aborted. Agent `bash` tool calls receive a block reason and concise guidance not to retry blindly; direct `!`/`!!` user bash commands receive a blocked bash result without executing the command.
-2. The second and later blocked attempts for the same host, from either agent or user bash, prompt in UI-capable mode with these choices:
-   - allow once,
-   - add to project config and allow this call,
-   - add to global config and allow this call,
-   - keep blocked.
-3. If UI confirmation is unavailable, repeated attempts fail closed.
+---
 
-When ProtectMe writes config from a repeated-attempt prompt, it shows a clean editable suggested host entry and asks for final confirmation before saving. Prompt and `/protectme` edits serialize read-modify-write updates per config file so concurrent changes preserve existing mode and allow-list data.
+## Commands and Tools
 
-## `/protectme` TUI panel
+| Surface | Name | Use it for |
+| --- | --- | --- |
+| Command | `/protectme` | Inspect effective config, edit project settings, and view recent blocked hosts in Pi TUI mode. |
+| Event guard | `tool_call` | Block unsupported destinations in agent `bash` tool calls before execution. |
+| Event guard | `user_bash` | Block unsupported destinations in direct Pi `!`/`!!` user bash commands before execution. |
+| Custom tools | None | ProtectMe is event-based and does not register agent tools. |
 
-Run:
+Guarded request CLIs:
 
-```text
-/protectme
-```
+- `curl`
+- `wget`
+- `http`
+- `https`
 
-The command opens only in Pi TUI mode and warns otherwise.
+ProtectMe also inspects approved non-network wrappers such as `sudo`, `env`, `time`, `timeout`, and `nice` when they launch a supported request CLI. URL-bearing proxy and resolver options are treated as additional destinations. Static option sources that can hide destinations, such as `curl --config` or `wget --input-file`, fail closed.
 
-The panel uses one framed box with:
+Suggested workflow:
 
-- a `CONFIGURATION` section for editable project settings,
-- an `INFO` section with global and project allow-list counts,
-- a compact header showing the global config path and project trust config path.
+1. Start with `/protectme` to inspect mode, trust status, and allow-list counts.
+2. Keep `mode` as `block` and add only the narrow project-specific hosts you need, such as `app.localhost` for local subdomain testing.
+3. Let the agent or direct Pi `!`/`!!` commands run supported request CLIs normally.
+4. Review repeated-block prompts carefully before allowing once or choosing which config file receives a saved allow-list entry.
 
-Configuration actions stay inside the same box:
-
-- `Effective mode` opens an in-panel confirmation before saving project mode as `block` or `allow`,
-- `Edit allow-list entry` opens an in-panel entry editor and confirmation before adding a project allow-list host,
-- `Recent blocked hosts` opens an in-panel read-only list from the blocked-attempt log.
-
-Confirmed changes are saved immediately, refresh the displayed counts/effective config, and return to the top of the configuration section. Cancelled steps do not write config files. Write failures are shown as errors without corrupting existing config files, and concurrent panel/prompt edits to the same config file are serialized.
-
-## Blocked-attempt log
-
-ProtectMe logs blocked attempts only at:
-
-```text
-.pi/agent/protectme_log.jsonl
-```
-
-Each line is JSON and includes bounded metadata such as timestamp, cwd, tool name, host, attempt count, mode, config source metadata, outcome, redacted request targets, and a redacted/truncated command snippet. URL credentials, sensitive query values, cookies, authorization headers, API keys, and common auth flags are redacted before persistence. Allowed requests are not logged.
-
-The log is project-local and append-only. ProtectMe does not compact, upload, or delete it automatically. `/protectme` reads only a bounded tail window when showing recent blocked hosts, so large historical logs do not need to be loaded into memory. Delete or truncate `.pi/agent/protectme_log.jsonl` when you no longer need local blocked-attempt history; ProtectMe recreates it on the next blocked attempt.
+---
 
 ## Troubleshooting
 
-- Unexpected block: run `/protectme`, inspect the effective mode and counts, then add the intended host to project config or edit the global config manually.
-- Config warning: fix invalid JSON/schema, unreadable files, or ignored invalid allow-list entries; while any loaded source is invalid or unreadable, ProtectMe uses `block` mode with an empty effective allow-list.
-- Prompt unavailable: use Pi TUI mode for confirmation prompts, or edit config manually.
-- Direct shell command was not blocked: run commands through Pi `!`/`!!` for ProtectMe coverage, and use OS/container network controls for commands outside Pi or unsupported CLIs.
-- Need to bypass protection temporarily: set project config to `{ "mode": "allow" }`.
-- Want a clean smoke test: run `pi --no-extensions -e .` from this repository.
+| Problem | Try |
+| --- | --- |
+| Unexpected block | Run `/protectme`, inspect mode and counts, then add the intended host to project config or global config. |
+| Config warning | Fix invalid JSON, schema errors, unreadable files, or ignored invalid allow-list entries. |
+| Project config ignored | Trust the project in Pi or use global config. ProtectMe does not read untrusted `.pi/protectme.json`. |
+| Prompt unavailable | Use Pi TUI mode for confirmation prompts, or edit config manually. Repeated attempts fail closed without UI confirmation. |
+| Direct shell command was not blocked | Run commands through Pi `!`/`!!`; commands outside Pi are outside ProtectMe's boundary. |
+| Unsupported CLI was not blocked | ProtectMe v1 covers `curl`, `wget`, `http`, and `https`; use OS/container controls for other network tools. |
+| Need a temporary bypass | Set project config to `{ "mode": "allow" }`, then switch back to `block` when finished. |
+| Want a clean smoke test | Run `pi --no-extensions -e .` from this repository. |
 
-## Development validation
+---
+
+## Development and Validation
 
 ```bash
+npm ci
 npm run typecheck
+npm run lint
+npm run format:check
 npm run test
 npm run test:coverage
 npm run check:pack
 npm run validate
 ```
 
-Package dry-run checks ensure generated artifacts, `.pi/`, logs, specs, and local state are not published.
-
-For a manual isolated Pi smoke test, run:
+Isolated interactive smoke test:
 
 ```bash
 pi --no-extensions -e .
 ```
 
-Follow [`docs/manual-smoke-test.md`](docs/manual-smoke-test.md) for the full safe smoke checklist.
+`npm run validate` includes type checking, ESLint, formatting checks, script syntax checks, automated tests, and package dry-run validation. CI runs the same validation chain.
 
-## Specs
+Project docs:
 
-Implementation history and remaining backlog live in:
+- [`docs/STRUCTURE.md`](docs/STRUCTURE.md) — repository layout and runtime boundaries.
+- [`docs/manual-smoke-test.md`](docs/manual-smoke-test.md) — isolated Pi smoke-test checklist.
+- [`docs/configuration-tui-design-standard.md`](docs/configuration-tui-design-standard.md) — `/protectme` TUI design standard.
+- [`specs/spec-protectme-architecture.md`](specs/spec-protectme-architecture.md) — architecture plan.
+- [`specs/spec-protectme-guidelines.md`](specs/spec-protectme-guidelines.md) — implementation guidelines.
+- [`specs/spec-protectme-tasks.md`](specs/spec-protectme-tasks.md) — implementation task list.
 
-- [`specs/spec-protectme-architecture.md`](specs/spec-protectme-architecture.md)
-- [`specs/spec-protectme-guidelines.md`](specs/spec-protectme-guidelines.md)
-- [`specs/spec-protectme-tasks.md`](specs/spec-protectme-tasks.md)
+---
 
-## Security
+## Update and Uninstall
 
-See [`SECURITY.md`](SECURITY.md).
+```bash
+pi update --extensions                    # update installed pi packages
+pi update npm:@senad-d/protectme          # update ProtectMe only
+pi remove npm:@senad-d/protectme          # remove global install
+pi remove npm:@senad-d/protectme -l       # remove project-local install
+```
+
+---
+
+## Publishing
+
+ProtectMe publishes to npm as `@senad-d/protectme`.
+
+```bash
+npm login
+npm whoami
+node scripts/publish-npm.mjs
+```
+
+Run the publish script only from a clean working tree after updating `CHANGELOG.md`.
+
+---
 
 ## License
 

@@ -5,7 +5,9 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
+  DEFAULT_PROTECTME_ALLOW_LIST,
   loadProtectMeConfig,
+  loadProtectMeConfigWithGlobalDefault,
   mutateGlobalProtectMeConfig,
   mutateProjectProtectMeConfig,
   parseProtectMeConfigText,
@@ -38,7 +40,7 @@ test("valid global and project configs merge in deterministic order", async () =
   assert.equal(result.projectConfig.status, "valid");
   assert.equal(result.effective.mode, "allow");
   assert.equal(result.effective.modeSource, "project");
-  assert.deepEqual(result.effective.allowList, ["example.com", "api.example.com", "project.example.com"]);
+  assert.deepEqual(result.effective.allowList, withDefaultAllowList("example.com", "api.example.com", "project.example.com"));
   assert.deepEqual(result.effective.allowListSources, ["global", "project"]);
   assert.deepEqual(result.effective.warnings, []);
 });
@@ -117,7 +119,7 @@ test("untrusted project config is ignored without broadening global protection",
   assert.match(result.projectConfig.message ?? "", /not read.*not trusted/i);
   assert.equal(result.effective.mode, "block");
   assert.equal(result.effective.modeSource, "global");
-  assert.deepEqual(result.effective.allowList, ["global.example.com"]);
+  assert.deepEqual(result.effective.allowList, withDefaultAllowList("global.example.com"));
   assert.deepEqual(result.effective.allowListSources, ["global"]);
   assert.match(result.effective.warnings.join("\n"), /project config ignored/);
   assert.doesNotMatch(result.effective.warnings.join("\n"), /project\.example\.com/);
@@ -133,7 +135,7 @@ test("trusted project config preserves documented global and project merge behav
   assert.equal(result.projectConfig.status, "valid");
   assert.equal(result.effective.mode, "allow");
   assert.equal(result.effective.modeSource, "project");
-  assert.deepEqual(result.effective.allowList, ["global.example.com", "project.example.com"]);
+  assert.deepEqual(result.effective.allowList, withDefaultAllowList("global.example.com", "project.example.com"));
   assert.deepEqual(result.effective.allowListSources, ["global", "project"]);
 });
 
@@ -150,7 +152,7 @@ test("global-only config contributes mode and normalized allowList", async () =>
   assert.equal(result.projectConfig.status, "missing");
   assert.equal(result.effective.mode, "allow");
   assert.equal(result.effective.modeSource, "global");
-  assert.deepEqual(result.effective.allowList, ["global.example"]);
+  assert.deepEqual(result.effective.allowList, withDefaultAllowList("global.example"));
   assert.deepEqual(result.effective.allowListSources, ["global"]);
 });
 
@@ -167,11 +169,11 @@ test("project-only config contributes mode and normalized allowList", async () =
   assert.equal(result.projectConfig.status, "valid");
   assert.equal(result.effective.mode, "block");
   assert.equal(result.effective.modeSource, "project");
-  assert.deepEqual(result.effective.allowList, ["project.example"]);
+  assert.deepEqual(result.effective.allowList, withDefaultAllowList("project.example"));
   assert.deepEqual(result.effective.allowListSources, ["project"]);
 });
 
-test("missing config still resolves to fail-closed defaults", async () => {
+test("missing config resolves to block mode with the starter allowList", async () => {
   const paths = createCasePaths("missing");
   const result = await loadProtectMeConfig(paths);
 
@@ -179,7 +181,35 @@ test("missing config still resolves to fail-closed defaults", async () => {
   assert.equal(result.projectConfig.status, "missing");
   assert.equal(result.effective.mode, "block");
   assert.equal(result.effective.modeSource, "default");
-  assert.deepEqual(result.effective.allowList, []);
+  assert.deepEqual(result.effective.allowList, [...DEFAULT_PROTECTME_ALLOW_LIST]);
+});
+
+test("runtime config loading initializes a missing global config file", async () => {
+  const paths = createCasePaths("auto-create-global");
+  const result = await loadProtectMeConfigWithGlobalDefault(paths);
+  const globalConfigText = await readFile(paths.globalConfigPath, "utf8");
+
+  assert.equal(result.globalConfig.status, "valid");
+  assert.equal(result.globalConfig.config?.mode, "block");
+  assert.deepEqual(result.globalConfig.config?.allowList, [...DEFAULT_PROTECTME_ALLOW_LIST]);
+  assert.equal(result.projectConfig.status, "missing");
+  assert.equal(result.effective.mode, "block");
+  assert.equal(result.effective.modeSource, "global");
+  assert.deepEqual(result.effective.allowList, [...DEFAULT_PROTECTME_ALLOW_LIST]);
+  assert.equal(globalConfigText, `${JSON.stringify({ mode: "block", allowList: [...DEFAULT_PROTECTME_ALLOW_LIST] }, null, 2)}\n`);
+});
+
+test("runtime global config initialization preserves untrusted project isolation", async () => {
+  const paths = createCasePaths("auto-create-global-untrusted-project");
+  await writeJsonConfig(paths.projectConfigPath, { mode: "allow", allowList: ["project.example.com"] });
+
+  const result = await loadProtectMeConfigWithGlobalDefault({ ...paths, projectTrusted: false });
+
+  assert.equal(result.globalConfig.status, "valid");
+  assert.equal(result.projectConfig.status, "ignored");
+  assert.equal(result.effective.mode, "block");
+  assert.deepEqual(result.effective.allowList, [...DEFAULT_PROTECTME_ALLOW_LIST]);
+  assert.match(result.effective.warnings.join("\n"), /project config ignored/);
 });
 
 test("invalid allowList entries are ignored with warning metadata", async () => {
@@ -192,7 +222,7 @@ test("invalid allowList entries are ignored with warning metadata", async () => 
   const result = await loadProtectMeConfig(paths);
 
   assert.equal(result.globalConfig.status, "valid");
-  assert.deepEqual(result.effective.allowList, ["example.com"]);
+  assert.deepEqual(result.effective.allowList, withDefaultAllowList("example.com"));
   assert.match(result.effective.warnings.join("\n"), /global allowList entry ignored \("bad host"\)/);
   assert.match(result.effective.warnings.join("\n"), /global allowList entry ignored \("https:\/\/\/"\)/);
 });
@@ -207,7 +237,7 @@ test("public suffix allowList entries are ignored while single-label entries sta
   const result = await loadProtectMeConfig(paths);
 
   assert.equal(result.globalConfig.status, "valid");
-  assert.deepEqual(result.effective.allowList, ["example.com", "internal-service", "localhost", "127.0.0.1", "2001:db8::1"]);
+  assert.deepEqual(result.effective.allowList, withDefaultAllowList("example.com", "internal-service", "2001:db8::1"));
   assert.match(result.effective.warnings.join("\n"), /global allowList entry ignored \("com"\): Public suffix entries/);
   assert.match(result.effective.warnings.join("\n"), /global allowList entry ignored \("co.uk"\): Public suffix entries/);
 });
@@ -356,6 +386,10 @@ function appendConfigEntryAfterDelay(entry) {
 
 async function waitOneTurn() {
   await Promise.resolve();
+}
+
+function withDefaultAllowList(...entries) {
+  return [...DEFAULT_PROTECTME_ALLOW_LIST, ...entries];
 }
 
 function assertFailClosedEffectiveConfig(result, sourceWarningPattern) {

@@ -2,6 +2,10 @@
 
 ## 0.1.0 - Unreleased
 
+- Added a built-in starter allow list for local development and common developer sites, plus docs for adding local subdomains such as `app.localhost`.
+- Added five lively, text-free SVG application icon variants and refreshed the primary ProtectMe icon asset.
+- Added five dark, text-free globe safety SVG application icon variants and refreshed the primary icon to the first dark globe variant.
+- Added five refined dark globe-lock SVG variants based on `icon-globe-safe-v2.svg`, with closed/vector-clipped edges for cleaner line endings.
 - Prepared ProtectMe package identity as `@senad-d/protectme`.
 - Added an `npm run open:google` helper that opens Google in the default browser.
 - Added approved project definition brief and three implementation specs.
@@ -41,3 +45,5 @@
 - Split the `/protectme` TUI panel into separate command, component, action, rendering, and shared-type modules.
 - Standardized CI dependency installation on `npm ci --ignore-scripts` to match Sonar lockfile validation.
 - Reworked the `/protectme` TUI into a one-box configuration/info layout with in-panel mode confirmation, allow-list entry confirmation, blocked-host log viewing, compact `🌐 (n sites)` status text, and final confirmation before repeated-attempt prompt config writes.
+- Added runtime initialization for missing global `~/.pi/agent/protectme.json` files and moved config-save target selection into final confirmation prompts.
+- Reformatted README with package badges, quick start, installation, configuration, troubleshooting, update/uninstall, and publishing guidance.

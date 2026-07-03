@@ -6,6 +6,7 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 
 import {
   createDefaultProtectMeConfig,
+  DEFAULT_PROTECTME_ALLOW_LIST,
   resolveBlockedAttemptLogPath,
   resolveDefaultAgentDir,
   resolveGlobalConfigPath,
@@ -55,18 +56,18 @@ test("config path helpers honor Pi's custom global agent directory", () => {
   }
 });
 
-test("missing config resolves to blocking mode with an empty allowList", () => {
+test("missing config resolves to blocking mode with the starter allowList", () => {
   const paths = resolveProtectMeConfigPaths({ cwd, homeDir });
   const defaultConfig = createDefaultProtectMeConfig();
   const missingConfig = resolveMissingProtectMeConfig(paths);
 
-  assert.deepEqual(defaultConfig, { mode: "block", allowList: [] });
+  assert.deepEqual(defaultConfig, { mode: "block", allowList: [...DEFAULT_PROTECTME_ALLOW_LIST] });
   assert.equal(missingConfig.globalConfig.status, "missing");
   assert.equal(missingConfig.projectConfig.status, "missing");
   assert.equal(missingConfig.globalConfig.path, paths.globalConfigPath);
   assert.equal(missingConfig.projectConfig.path, paths.projectConfigPath);
   assert.equal(missingConfig.effective.mode, "block");
-  assert.deepEqual(missingConfig.effective.allowList, []);
+  assert.deepEqual(missingConfig.effective.allowList, [...DEFAULT_PROTECTME_ALLOW_LIST]);
   assert.equal(missingConfig.effective.modeSource, "default");
   assert.deepEqual(missingConfig.effective.allowListSources, []);
   assert.deepEqual(missingConfig.effective.configSources, [missingConfig.globalConfig, missingConfig.projectConfig]);

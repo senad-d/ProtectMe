@@ -1,6 +1,6 @@
 # ProtectMe Structure Guide
 
-ProtectMe is a Pi extension package for network and website access guardrails. The current implementation includes config parsing/merging/write-back, host normalization and allow matching, supported bash request extraction, blocked-attempt logging, session lifecycle status/warnings, first-attempt blocking, repeated-attempt prompts, allow-mode bypass behavior, and a one-box `/protectme` TUI configuration panel with in-panel confirmation flows.
+ProtectMe is a Pi extension package for network and website access guardrails. The current implementation includes config parsing/merging/write-back, automatic missing global-config initialization, host normalization and allow matching, supported bash request extraction, blocked-attempt logging, session lifecycle status/warnings, first-attempt blocking, repeated-attempt prompts with project/global save-target confirmation, allow-mode bypass behavior, and a one-box `/protectme` TUI configuration panel with in-panel confirmation flows.
 
 ## Current implementation layout
 
@@ -61,7 +61,7 @@ The implemented config schema is:
 }
 ```
 
-Project mode overrides global mode when present. Project allow-list entries append to global entries. Missing config defaults to `mode: "block"` and an empty allow list. Invalid or unreadable config fails closed and emits warnings.
+Built-in starter entries load first, then global allow-list entries, then trusted project entries. Project mode overrides global mode when present. Runtime loading creates a missing global config with `mode: "block"` and the starter allow list (`localhost`, `127.0.0.1`, `::1`, `pi.dev`, `github.com`, `npmjs.com`, `registry.npmjs.org`, and `nodejs.org`); missing project config still defaults through the built-in starter policy. Invalid or unreadable config fails closed with an empty effective allow list and emits warnings.
 
 ## Module ownership
 

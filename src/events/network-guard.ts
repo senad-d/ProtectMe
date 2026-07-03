@@ -5,10 +5,10 @@ import { getAgentDir as getPiAgentDir, type ExtensionAPI } from "@earendil-works
 import {
   appendProtectMeConfigAllowListEntry,
   buildProtectMeConfigEditSourceError,
-  loadProtectMeConfig,
+  loadProtectMeConfigWithGlobalDefault,
+  normalizeConfigAllowListEntry,
   mutateGlobalProtectMeConfig,
   mutateProjectProtectMeConfig,
-  planProtectMeConfigAllowListAppend,
   selectProtectMeConfigEditSource,
   type ParsedProtectMeConfig,
   type ProtectMeConfigFile,
@@ -54,20 +54,19 @@ export {
 
 export const PROTECTME_SECOND_ATTEMPT_CHOICES = {
   allowOnce: "Allow once",
-  addProject: "Add to project config and allow this call",
-  addGlobal: "Add to global config and allow this call",
+  editConfig: "Edit allow-list entry and choose config before saving",
   keepBlocked: "Keep blocked",
 } as const;
 
 export const PROTECTME_CONFIG_CONFIRM_CHOICES = {
-  saveAndAllow: "Save entry and allow this call",
+  saveProjectAndAllow: "Save to project config and allow this call",
+  saveGlobalAndAllow: "Save to global config and allow this call",
   cancel: "Cancel without saving",
 } as const;
 
 export const PROTECTME_GUIDANCE_CUSTOM_MESSAGE_TYPE = "protectme-guidance";
 
 const PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES = Object.values(PROTECTME_SECOND_ATTEMPT_CHOICES);
-const PROTECTME_CONFIG_CONFIRM_CHOICE_VALUES = Object.values(PROTECTME_CONFIG_CONFIRM_CHOICES);
 const PROTECTME_USER_BASH_LOG_TOOL_NAME = "user_bash";
 const PROTECTME_PROMPT_ERROR_NOTIFICATION = [
   "ProtectMe blocked this repeated network request because the confirmation prompt failed.",
@@ -167,7 +166,7 @@ export function createDefaultNetworkGuardDependencies(pi: ExtensionAPI): Network
   return {
     getHomeDir: homedir,
     getAgentDir: getPiAgentDir,
-    loadConfig: loadProtectMeConfig,
+    loadConfig: loadProtectMeConfigWithGlobalDefault,
     appendBlockedAttemptLog,
     mutateProjectConfig: mutateProjectProtectMeConfig,
     mutateGlobalConfig: mutateGlobalProtectMeConfig,
@@ -389,23 +388,20 @@ async function promptForRepeatedBlockedRequest(
   }
 
   if (choice === PROTECTME_SECOND_ATTEMPT_CHOICES.allowOnce) return { action: "allow" };
-  if (choice === PROTECTME_SECOND_ATTEMPT_CHOICES.addProject) return allowViaConfigWrite("project", ui, config, request, dependencies);
-  if (choice === PROTECTME_SECOND_ATTEMPT_CHOICES.addGlobal) return allowViaConfigWrite("global", ui, config, request, dependencies);
+  if (choice === PROTECTME_SECOND_ATTEMPT_CHOICES.editConfig) return allowViaConfigWrite(ui, config, request, dependencies);
 
   return buildPromptDeniedDecision(request.candidate.host);
 }
 
 async function allowViaConfigWrite(
-  target: ConfigPromptTarget,
   ui: NetworkGuardPromptUI,
   config: ProtectMeConfigLoadResult,
   request: DisallowedRequest,
   dependencies: NetworkGuardDependencies,
 ): Promise<NetworkGuardDecision> {
-  const configSource = selectProtectMeConfigEditSource(config, target);
-  const unsafeReason = buildProtectMeConfigEditSourceError(configSource);
-  if (unsafeReason) {
-    notifyPromptFailure(ui, unsafeReason);
+  const unavailableReason = buildNoWritableConfigTargetReason(config);
+  if (unavailableReason) {
+    notifyPromptFailure(ui, unavailableReason);
     return buildPromptDeniedDecision(request.candidate.host);
   }
 
@@ -413,22 +409,22 @@ async function allowViaConfigWrite(
   let editedEntry: string | undefined;
 
   try {
-    editedEntry = await ui.editor(buildAllowListEntryEditorTitle(target, request.candidate.host), suggestedEntry);
+    editedEntry = await ui.editor(buildAllowListEntryEditorTitle(request.candidate.host), suggestedEntry);
   } catch {
     notifyPromptError(ui);
     return buildPromptErrorDecision(request.candidate.host);
   }
 
-  const writePlan = planProtectMeConfigAllowListAppend(configSource, editedEntry);
+  const writePlan = planEditedAllowListEntry(editedEntry);
 
   if (!writePlan.ok) {
-    notifyPromptFailure(ui, writePlan.reason ?? "No allow-list entry was confirmed.");
+    notifyPromptFailure(ui, writePlan.reason);
     return buildPromptDeniedDecision(request.candidate.host);
   }
 
-  const confirmed = await confirmConfigWrite(target, ui, request, writePlan.entry);
-  if (confirmed === "error") return buildPromptErrorDecision(request.candidate.host);
-  if (!confirmed) return buildPromptDeniedDecision(request.candidate.host);
+  const target = await confirmConfigWrite(ui, config, request, writePlan.entry);
+  if (target === "error") return buildPromptErrorDecision(request.candidate.host);
+  if (!target) return buildPromptDeniedDecision(request.candidate.host);
 
   try {
     await mutateTargetConfig(target, config, writePlan.entry, dependencies);
@@ -485,20 +481,44 @@ function buildSuggestedAllowListEntry(request: DisallowedRequest): string {
   return suggestion.suggestedEntry ?? request.candidate.host;
 }
 
-function buildAllowListEntryEditorTitle(target: ConfigPromptTarget, host: string): string {
-  return `ProtectMe ${target} allow-list entry for ${host}`;
+function buildNoWritableConfigTargetReason(config: ProtectMeConfigLoadResult): string | null {
+  if (isWritableConfigPromptTarget(config, "project")) return null;
+  if (isWritableConfigPromptTarget(config, "global")) return null;
+
+  return "No writable ProtectMe config target is available.";
+}
+
+function isWritableConfigPromptTarget(config: ProtectMeConfigLoadResult, target: ConfigPromptTarget): boolean {
+  const configSource = selectProtectMeConfigEditSource(config, target);
+
+  return buildProtectMeConfigEditSourceError(configSource) === null;
+}
+
+function planEditedAllowListEntry(
+  editedEntry: string | undefined,
+): { ok: true; entry: string } | { ok: false; reason: string } {
+  if (editedEntry === undefined) return { ok: false, reason: "No allow-list entry was confirmed." };
+
+  const normalizedEntry = normalizeConfigAllowListEntry(editedEntry);
+  if (!normalizedEntry) return { ok: false, reason: `Invalid allow-list entry: ${JSON.stringify(editedEntry)}` };
+
+  return { ok: true, entry: normalizedEntry };
+}
+
+function buildAllowListEntryEditorTitle(host: string): string {
+  return `ProtectMe allow-list entry for ${host}`;
 }
 
 async function confirmConfigWrite(
-  target: ConfigPromptTarget,
   ui: NetworkGuardPromptUI,
+  config: ProtectMeConfigLoadResult,
   request: DisallowedRequest,
   entry: string,
-): Promise<boolean | "error"> {
+): Promise<ConfigPromptTarget | false | "error"> {
   try {
-    const choice = await ui.select(buildConfigWriteConfirmationPrompt(target, request, entry), PROTECTME_CONFIG_CONFIRM_CHOICE_VALUES);
+    const choice = await ui.select(buildConfigWriteConfirmationPrompt(config, request, entry), buildConfigWriteConfirmationChoices(config));
 
-    return choice === PROTECTME_CONFIG_CONFIRM_CHOICES.saveAndAllow;
+    return resolveConfigWriteConfirmationChoice(choice);
   } catch {
     notifyPromptError(ui);
 
@@ -506,12 +526,30 @@ async function confirmConfigWrite(
   }
 }
 
-function buildConfigWriteConfirmationPrompt(target: ConfigPromptTarget, request: DisallowedRequest, entry: string): string {
+function buildConfigWriteConfirmationPrompt(config: ProtectMeConfigLoadResult, request: DisallowedRequest, entry: string): string {
   return [
-    `ProtectMe will add ${entry} to ${target} config.`,
+    `ProtectMe will add ${entry} to the selected config.`,
     `Blocked request host: ${request.candidate.host}`,
-    "Confirm this config change before allowing the current call.",
+    `Project config: ${formatConfigSourceForPrompt(config.projectConfig)}`,
+    `Global config: ${formatConfigSourceForPrompt(config.globalConfig)}`,
+    "Choose where to save this entry before allowing the current call.",
   ].join("\n");
+}
+
+function buildConfigWriteConfirmationChoices(config: ProtectMeConfigLoadResult): string[] {
+  const choices: string[] = [];
+  if (isWritableConfigPromptTarget(config, "project")) choices.push(PROTECTME_CONFIG_CONFIRM_CHOICES.saveProjectAndAllow);
+  if (isWritableConfigPromptTarget(config, "global")) choices.push(PROTECTME_CONFIG_CONFIRM_CHOICES.saveGlobalAndAllow);
+  choices.push(PROTECTME_CONFIG_CONFIRM_CHOICES.cancel);
+
+  return choices;
+}
+
+function resolveConfigWriteConfirmationChoice(choice: string | undefined): ConfigPromptTarget | false {
+  if (choice === PROTECTME_CONFIG_CONFIRM_CHOICES.saveProjectAndAllow) return "project";
+  if (choice === PROTECTME_CONFIG_CONFIRM_CHOICES.saveGlobalAndAllow) return "global";
+
+  return false;
 }
 
 async function mutateTargetConfig(

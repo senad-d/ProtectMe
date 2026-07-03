@@ -90,7 +90,7 @@ Rules:
 - `mode` values are only `block` and `allow`.
 - `allowList` is camelCase.
 - Do not reintroduce alternate names in public docs.
-- Missing config defaults to `mode: "block"` and `allowList: []`.
+- Missing project config defaults to `mode: "block"` with the built-in starter `allowList`: `localhost`, `127.0.0.1`, `::1`, `pi.dev`, `github.com`, `npmjs.com`, `registry.npmjs.org`, and `nodejs.org`; missing global config is initialized automatically with that default file content.
 
 ### Config locations
 - Global config: `~/.pi/agent/protectme.json`.
@@ -100,12 +100,14 @@ Rules:
 Use Pi config-directory constants where applicable instead of hardcoding `.pi` if a Pi API provides the directory name.
 
 ### Merge behavior
-- Read global first.
-- Read project second only when project config is allowed by trust context.
-- Effective `allowList` is global plus project, normalized and deduplicated.
+- Load built-in starter allow-list entries first.
+- Read global config next.
+- Read project config second only when project config is allowed by trust context.
+- Effective `allowList` is starter plus global plus project, normalized and deduplicated.
 - Effective `mode` is project mode when present, otherwise global mode, otherwise `block`.
 
 ### Write behavior
+- Runtime startup must create `~/.pi/agent/protectme.json` with default config when the global config is missing.
 - Project writes must create `.pi/` when needed.
 - Log writes must create `.pi/agent/` when needed.
 - Global writes must create `~/.pi/agent/` when needed.
@@ -143,6 +145,7 @@ This protects normal development workflows such as adding URLs to docs, source f
 - Treat each entry as allowing itself and child subdomains.
 - Never allow parent domains from a child entry.
 - Treat localhost and IP entries as exact hosts.
+- Document that users can add exact local subdomains such as `app.localhost` for local test workflows.
 - Deduplicate normalized entries.
 
 ### Block behavior
@@ -177,7 +180,7 @@ For second-attempt prompts:
 - use `ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.input`, or a small custom dialog,
 - keep choices clear,
 - timeouts should fail closed unless explicitly designed otherwise,
-- let the user edit the suggested entry before saving.
+- let the user edit the suggested entry before choosing project or global config in the save confirmation.
 
 ### TUI command
 `/protectme` should use `ctx.mode === "tui"` before opening a custom TUI component.

@@ -18,6 +18,7 @@ ProtectMe currently:
 - inspects supported LLM `bash` tool calls for request-making commands: `curl`, `wget`, `http`, and `https`,
 - inspects supported Pi user bash commands typed with `!` or `!!` for the same request-making commands,
 - ignores file/content tools such as `read`, `write`, and `edit` even if their inputs contain URLs,
+- includes a small built-in starter allow list for local development and common developer sites,
 - blocks detected network requests when effective `mode` is `block` and the host is not in the effective `allowList`,
 - allows detected requests without prompts or blocked-attempt logs when effective `mode` is `allow`,
 - prompts in UI-capable mode on second and later blocked attempts for the same host,
@@ -44,14 +45,14 @@ ProtectMe reads configuration from:
 - global config: `~/.pi/agent/protectme.json`,
 - project config: `.pi/protectme.json`.
 
-ProtectMe can write those files only through explicit user-facing flows:
+ProtectMe creates a missing global config file at `~/.pi/agent/protectme.json` with built-in defaults during runtime load. Other config writes happen only through explicit user-facing flows:
 
-- repeated blocked-attempt prompt choices,
-- `/protectme` TUI editing actions.
+- repeated blocked-attempt prompt choices with a project/global save-target confirmation,
+- `/protectme` TUI editing actions with a project/global save-target confirmation.
 
 Project config writes target `.pi/protectme.json`. Global config writes target `~/.pi/agent/protectme.json`. Writes create parent directories as needed and serialize JSON with two-space indentation. Write failures are shown as errors, and existing config files are not intentionally corrupted or partially rewritten.
 
-Invalid or unreadable config fails closed: ProtectMe uses `mode: "block"` with valid normalized entries only and reports warning metadata.
+Invalid or unreadable loaded config fails closed: ProtectMe uses `mode: "block"` with an empty effective allow list and reports warning metadata.
 
 ## Blocked-attempt logs
 
@@ -80,6 +81,7 @@ Allowed requests are not logged.
 
 ## Safe usage guidance
 
+- Review the built-in starter allow list before relying on ProtectMe for strict network egress control.
 - Keep allow-list entries as narrow as practical.
 - Prefer project config for repository-specific hosts.
 - Use global config only for hosts trusted across projects.

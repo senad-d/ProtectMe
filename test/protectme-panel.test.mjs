@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-import { mergeProtectMeConfigs } from "../src/config/index.ts";
+import { DEFAULT_PROTECTME_ALLOW_LIST, mergeProtectMeConfigs } from "../src/config/index.ts";
 import { extractRecentBlockedHosts, readRecentBlockedHosts } from "../src/logging/blocked-attempt-log.ts";
 import { executeProtectMePanelAction } from "../src/ui/protectme-panel/actions.ts";
 import { renderProtectMePanel } from "../src/ui/protectme-panel/rendering.ts";
@@ -24,6 +24,7 @@ const plainTheme = {
 const cwd = "/workspace/project";
 const homeDir = "/home/user";
 const agentDir = `${homeDir}/.pi/agent`;
+const starterAllowListCount = DEFAULT_PROTECTME_ALLOW_LIST.length;
 
 test("ProtectMe panel wide layout uses one framed box and displays config state", () => {
   const component = createPanelComponent();
@@ -136,7 +137,7 @@ test("ProtectMe panel action executor toggles mode without the component state m
 
   assert.deepEqual(result, { status: "success", message: "Saved project mode allow." });
   assert.deepEqual(editable.projectWrites.at(-1).config, { mode: "allow", allowList: ["project.example.com"] });
-  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "🌐 (2 sites)" });
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: siteStatus(2) });
 });
 
 test("ProtectMe panel confirms mode changes and adds project/global entries", async () => {
@@ -149,7 +150,7 @@ test("ProtectMe panel confirms mode changes and adds project/global entries", as
 
   assert.equal(editable.state.config.effective.mode, "allow");
   assert.deepEqual(editable.projectWrites.at(-1).config, { mode: "allow", allowList: ["project.example.com"] });
-  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "🌐 (2 sites)" });
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: siteStatus(2) });
 
   editable.state.recentBlockedHosts = [];
   editable.component.handleInput("\u001b[B");
@@ -164,7 +165,7 @@ test("ProtectMe panel confirms mode changes and adds project/global entries", as
     mode: "allow",
     allowList: ["project.example.com", "new.example.com"],
   });
-  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "🌐 (3 sites)" });
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: siteStatus(3) });
 
   editable.ui.editorValues.push("Global-Add.example.com");
   await executeProtectMePanelAction("addEntry", "global", editable.state, editable.actionDependencies);
@@ -173,8 +174,8 @@ test("ProtectMe panel confirms mode changes and adds project/global entries", as
     mode: "block",
     allowList: ["global.example.com", "global-add.example.com"],
   });
-  assert.equal(editable.state.config.effective.allowList.length, 4);
-  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "🌐 (4 sites)" });
+  assert.equal(editable.state.config.effective.allowList.length, starterAllowListCount + 4);
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: siteStatus(4) });
   assert.equal(editable.component.render(96).some((line) => line.includes("Project site count") && line.includes("2")), true);
 });
 
@@ -210,7 +211,7 @@ test("ProtectMe panel action executor removes entries from project and global co
   await executeProtectMePanelAction("removeEntry", "global", editable.state, editable.actionDependencies);
 
   assert.deepEqual(editable.globalWrites.at(-1).config, { mode: "block", allowList: ["keep-global.example.com"] });
-  assert.equal(editable.state.config.effective.allowList.length, 2);
+  assert.equal(editable.state.config.effective.allowList.length, starterAllowListCount + 2);
 });
 
 test("ProtectMe panel status refresh surfaces bounded warnings after successful edits", async () => {
@@ -229,7 +230,7 @@ test("ProtectMe panel status refresh surfaces bounded warnings after successful 
   editable.component.handleInput("\r");
   await flushPanelActions();
 
-  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "🌐 (3 sites)" });
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: siteStatus(3) });
   assert.equal(editable.ui.notifications[0].type, "warning");
   assert.match(editable.ui.notifications[0].message, /ProtectMe config warning: global allowList entry ignored/u);
   assert.match(editable.ui.notifications[0].message, /\+1 more/u);
@@ -277,17 +278,21 @@ test("ProtectMe panel write failures show errors and keep loaded config unchange
   assert.equal(component.render(96).some((line) => line.includes("Failed to write project config")), true);
 });
 
-test("ProtectMe panel rejects project config edits while project config is ignored", async () => {
+test("ProtectMe panel can save global config while project config is ignored", async () => {
   const editable = createEditablePanel(buildIgnoredProjectConfigResult());
 
+  editable.state.recentBlockedHosts = [];
+  editable.component.handleInput("\u001b[B");
+  editable.component.handleInput("\r");
+  editable.component.handleInput("ignored-global.example.com");
+  editable.component.handleInput("\r");
   editable.component.handleInput("\u001b[B");
   editable.component.handleInput("\r");
   await flushPanelActions();
 
-  assert.equal(editable.ui.editorCalls.length, 0);
   assert.equal(editable.projectWrites.length, 0);
-  assert.equal(editable.ui.notifications.length, 0);
-  assert.equal(editable.component.render(140).some((line) => line.includes("project config is ignored")), true);
+  assert.deepEqual(editable.globalWrites.at(-1).config, { mode: "block", allowList: ["ignored-global.example.com"] });
+  assert.deepEqual(editable.ui.notifications.at(-1), { message: "Saved ignored-global.example.com to global config.", type: "info" });
 });
 
 test("/protectme command explains TUI requirement outside TUI mode", async () => {
@@ -460,6 +465,10 @@ function buildParsedConfigSource(source, path, config) {
     status: config ? "valid" : "missing",
     config,
   };
+}
+
+function siteStatus(configuredSiteCount) {
+  return `🌐 (${starterAllowListCount + configuredSiteCount} sites)`;
 }
 
 async function flushPanelActions() {

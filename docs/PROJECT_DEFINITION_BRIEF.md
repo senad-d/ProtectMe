@@ -62,7 +62,7 @@
 
 ## 6. Config, state, and persistence
 
-- Global config: `~/.pi/agent/protectme.json`
+- Global config: `~/.pi/agent/protectme.json` (created automatically with defaults when missing)
 - Project config: `.pi/protectme.json`
 - Block log: `.pi/agent/protectme_log.jsonl`
 - Config schema:
@@ -76,7 +76,7 @@
 
 - `mode: "block"`: detected requests are blocked unless allowed.
 - `mode: "allow"`: ProtectMe is effectively disabled and detected requests are allowed.
-- Effective `allowList`: global entries plus project entries.
+- Effective `allowList`: built-in starter entries plus global entries plus project entries.
 - Effective `mode`: project mode when present, otherwise global mode, otherwise `block`.
 - Session state: in-memory blocked-host attempt counts, reset per session.
 
@@ -87,7 +87,7 @@
 - Network access: ProtectMe does not make network calls.
 - Credentials/secrets: no credentials required.
 - Telemetry/retention: no telemetry; blocked logs remain project-local.
-- User confirmations: repeated blocked host attempts can prompt in UI-capable mode.
+- User confirmations: repeated blocked host attempts can prompt in UI-capable mode and require a project/global save-target choice before writing config.
 
 ## 8. Documentation and packaging
 
