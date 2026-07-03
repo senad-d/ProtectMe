@@ -122,6 +122,86 @@ test("allowed bash request is not blocked or logged", async () => {
   assert.equal(fake.guidanceMessages.length, 0);
 });
 
+test("wrapped bash requests are still detected and blocked", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult());
+
+  const result = await handleNetworkGuardToolCall(
+    { toolName: "bash", input: { command: "sudo -u root env TOKEN=1 timeout 5 nice -n 1 curl https://wrapped.example.com" } },
+    createFakeContext(),
+    state,
+    fake.dependencies,
+  );
+
+  assert.deepEqual(result, {
+    block: true,
+    reason:
+      'ProtectMe blocked network request to wrapped.example.com. mode: "block" allows only configured hosts. Do not retry blindly; continue with local or already allowed work, or ask the user if access is required.',
+  });
+  assert.equal(fake.loggedAttempts.length, 1);
+  assert.equal(fake.loggedAttempts[0].host, "wrapped.example.com");
+});
+
+test("network-affecting option values must also be allowed", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult({ allowList: ["target.example.com"] }));
+
+  const result = await handleNetworkGuardToolCall(
+    { toolName: "bash", input: { command: "curl --proxy http://proxy.example.com:8080 https://target.example.com" } },
+    createFakeContext(),
+    state,
+    fake.dependencies,
+  );
+
+  assert.deepEqual(result, {
+    block: true,
+    reason:
+      'ProtectMe blocked network request to proxy.example.com. mode: "block" allows only configured hosts. Do not retry blindly; continue with local or already allowed work, or ask the user if access is required.',
+  });
+  assert.equal(fake.loggedAttempts.length, 1);
+  assert.equal(fake.loggedAttempts[0].rawUrl, "http://proxy.example.com:8080");
+  assert.equal(fake.loggedAttempts[0].host, "proxy.example.com");
+});
+
+test("blocked request log inputs redact URL credentials, query tokens, headers, and auth flags", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult());
+  const command = [
+    "curl --user alice:password-one --proxy-user proxy:password-two",
+    "-H 'Cookie: session=cookie-secret'",
+    "-H 'X-API-Key: api-secret'",
+    "https://user:password-three@private.example.com/path?token=query-secret",
+  ].join(" ");
+
+  await handleNetworkGuardToolCall({ toolName: "bash", input: { command } }, createFakeContext(), state, fake.dependencies);
+
+  const loggedAttempt = fake.loggedAttempts[0];
+  const serializedAttempt = JSON.stringify(loggedAttempt);
+  assert.match(loggedAttempt.rawUrl, /\[REDACTED\]@private\.example\.com/u);
+  assert.match(loggedAttempt.rawUrl, /token=\[REDACTED\]/u);
+  assert.equal(loggedAttempt.normalizedUrl, loggedAttempt.rawUrl);
+  assert.doesNotMatch(serializedAttempt, /password-one|password-two|password-three|cookie-secret|api-secret|query-secret/u);
+});
+
+test("unsupported static network option sources fail closed even when visible URLs are allowed", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult({ allowList: ["allowed.example.com"] }));
+  const event = { toolName: "bash", input: { command: "curl --config .curlrc https://allowed.example.com" } };
+
+  const firstResult = await handleNetworkGuardToolCall(event, createFakeContext({ hasUI: true }), state, fake.dependencies);
+  const secondResult = await handleNetworkGuardToolCall(event, createFakeContext({ hasUI: true }), state, fake.dependencies);
+
+  assert.deepEqual(firstResult, {
+    block: true,
+    reason:
+      "ProtectMe blocked curl because --config .curlrc cannot be inspected safely: curl config files can contain additional URLs or network options that ProtectMe cannot inspect safely.",
+  });
+  assert.deepEqual(secondResult, firstResult);
+  assert.equal(fake.loggedAttempts.length, 2);
+  assert.equal(fake.loggedAttempts[0].host, "unsupported static network option");
+  assert.equal(fake.guidanceMessages.length, 0);
+});
+
 test("mode allow lets all supported bash request CLIs proceed without logging or prompts", async () => {
   const state = createNetworkGuardState();
   const fake = createFakeDependencies(buildConfigResult({ mode: "allow" }));
@@ -165,6 +245,34 @@ test("project allow mode disables blocking even when global mode is block", asyn
   assert.equal(fake.guidanceMessages.length, 0);
   assert.equal(ctx.ui.selectCalls.length, 0);
   assert.equal(state.blockedHostAttempts.size, 0);
+});
+
+test("mixed-source invalid config fails closed in network guard despite permissive other source", async () => {
+  const configResults = [buildMixedInvalidProjectFailClosedConfigResult(), buildMixedInvalidGlobalFailClosedConfigResult()];
+
+  for (const configResult of configResults) {
+    const state = createNetworkGuardState();
+    const fake = createFakeDependencies(configResult);
+    const ctx = createFakeContext({ hasUI: true });
+
+    await handleNetworkGuardSessionStart(ctx, state, fake.dependencies);
+    const result = await handleNetworkGuardToolCall(
+      { toolName: "bash", input: { command: "curl https://permissive.example.com" } },
+      ctx,
+      state,
+      fake.dependencies,
+    );
+
+    assert.equal(ctx.ui.statusCalls[0].text, "ProtectMe: block · 0 sites");
+    assert.match(ctx.ui.notifications[0].message, /Effective config failed closed/u);
+    assert.deepEqual(result, {
+      block: true,
+      reason:
+        'ProtectMe blocked network request to permissive.example.com. mode: "block" allows only configured hosts. Do not retry blindly; continue with local or already allowed work, or ask the user if access is required.',
+    });
+    assert.equal(fake.loggedAttempts.length, 1);
+    assert.equal(fake.loggedAttempts[0].outcome, "blocked");
+  }
 });
 
 test("untrusted project config is visible as ignored and does not disable blocking", async () => {
@@ -408,6 +516,8 @@ function createFakeDependencies(configResult) {
   const globalWrites = [];
   const loadInputs = [];
   let loadCalls = 0;
+  let currentProjectConfig = configResult.projectConfig.config ?? {};
+  let currentGlobalConfig = configResult.globalConfig.config ?? {};
   const dependencies = {
     getHomeDir() {
       return homeDir;
@@ -422,11 +532,15 @@ function createFakeDependencies(configResult) {
       loggedAttempts.push(input);
       return buildBlockedAttemptLogEntry(input);
     },
-    async writeProjectConfig(paths, config) {
-      projectWrites.push({ paths: { projectConfigPath: paths.projectConfigPath }, config });
+    async mutateProjectConfig(paths, mutation) {
+      currentProjectConfig = await mutation(currentProjectConfig);
+      projectWrites.push({ paths: { projectConfigPath: paths.projectConfigPath }, config: currentProjectConfig });
+      return currentProjectConfig;
     },
-    async writeGlobalConfig(paths, config) {
-      globalWrites.push({ paths: { globalConfigPath: paths.globalConfigPath }, config });
+    async mutateGlobalConfig(paths, mutation) {
+      currentGlobalConfig = await mutation(currentGlobalConfig);
+      globalWrites.push({ paths: { globalConfigPath: paths.globalConfigPath }, config: currentGlobalConfig });
+      return currentGlobalConfig;
     },
     sendGuidance(message, options) {
       guidanceMessages.push({ message, options });
@@ -558,6 +672,66 @@ function buildProjectAllowOverGlobalBlockConfigResult() {
       configSources: [globalConfig, projectConfig],
     },
   };
+}
+
+function buildMixedInvalidProjectFailClosedConfigResult() {
+  const base = buildConfigResult();
+  const globalConfig = {
+    ...base.globalConfig,
+    status: "valid",
+    config: { mode: "allow", allowList: ["permissive.example.com"] },
+  };
+  const projectConfig = {
+    ...base.projectConfig,
+    status: "invalid",
+    message: "Invalid JSON: Unexpected end of JSON input",
+    config: null,
+  };
+  const warnings = buildFailClosedConfigWarnings("project", "invalid");
+
+  return buildFailClosedConfigResult(base, globalConfig, projectConfig, warnings);
+}
+
+function buildMixedInvalidGlobalFailClosedConfigResult() {
+  const base = buildConfigResult();
+  const globalConfig = {
+    ...base.globalConfig,
+    status: "invalid",
+    message: "Invalid JSON: Unexpected end of JSON input",
+    config: null,
+  };
+  const projectConfig = {
+    ...base.projectConfig,
+    status: "valid",
+    config: { mode: "allow", allowList: ["permissive.example.com"] },
+  };
+  const warnings = buildFailClosedConfigWarnings("global", "invalid");
+
+  return buildFailClosedConfigResult(base, globalConfig, projectConfig, warnings);
+}
+
+function buildFailClosedConfigResult(base, globalConfig, projectConfig, warnings) {
+  return {
+    ...base,
+    globalConfig,
+    projectConfig,
+    effective: {
+      ...base.effective,
+      mode: "block",
+      modeSource: "default",
+      allowList: [],
+      allowListSources: [],
+      configSources: [globalConfig, projectConfig],
+      warnings,
+    },
+  };
+}
+
+function buildFailClosedConfigWarnings(source, status) {
+  return [
+    `${source} config ${status}: Invalid JSON: Unexpected end of JSON input`,
+    `Effective config failed closed because ${source} config ${status}; mode "block" and empty allowList are in use.`,
+  ];
 }
 
 function buildUntrustedProjectIgnoredConfigResult() {

@@ -13,6 +13,8 @@ ProtectMe inspects `bash` tool calls for supported request-making CLIs:
 
 It intentionally ignores raw URL text when no supported request CLI is present, and it does not parse `read`, `write`, `edit`, or other file/content tool inputs just because they contain URLs.
 
+ProtectMe also inspects approved non-network wrappers such as `sudo`, `env`, `time`, `timeout`, and `nice` when they launch a supported request CLI. URL-bearing proxy/resolver options are guarded as additional destinations. Static option sources that can hide network destinations, such as `curl --config` or `wget --input-file`, fail closed because ProtectMe cannot inspect those files safely before execution.
+
 ProtectMe itself does not make network calls, does not require credentials, and does not send telemetry.
 
 ## Installation
@@ -41,6 +43,8 @@ ProtectMe reads two JSON config files:
 | --- | --- |
 | Global | `~/.pi/agent/protectme.json` |
 | Project | `.pi/protectme.json` |
+
+Project config is honored only when Pi reports the current project as trusted. In untrusted projects, ProtectMe does not read `.pi/protectme.json` and reports the project config as ignored.
 
 Schema:
 
@@ -73,12 +77,14 @@ Missing config defaults to:
 ### Merge behavior
 
 - Global config loads first.
-- Project config appends additional `allowList` entries.
-- Project `mode` overrides global `mode` when present.
+- Trusted project config appends additional `allowList` entries.
+- Trusted project `mode` overrides global `mode` when present.
+- Untrusted project config is ignored without reading project-local contents.
 - Otherwise global `mode` applies.
 - Otherwise mode defaults to `"block"`.
 - Entries are normalized and deduplicated in the effective config.
-- Invalid or unreadable config fails closed and is reported as a warning.
+- If any loaded global or trusted-project config is invalid or unreadable, the entire effective config fails closed with `mode: "block"` and an empty `allowList`.
+- Missing config and ignored untrusted-project config do not force fail-closed behavior.
 
 ## Host matching rules
 
@@ -88,6 +94,8 @@ Examples:
 
 - `example.com` allows `example.com`, `example.com/login`, `api.example.com`, and deeper child subdomains.
 - `api.example2.com` allows itself and child subdomains, but not parent domain `example2.com`.
+- Public suffix entries such as `com` or `co.uk` are ignored and reported as config warnings.
+- Single-label non-localhost entries such as `internal-service` match only that exact host, not `api.internal-service`.
 - `localhost`, IPv4, and IPv6 entries match exactly.
 - Invalid entries are ignored and reported as config warnings.
 
@@ -103,7 +111,7 @@ When effective mode is `"block"`:
    - keep blocked.
 3. If UI confirmation is unavailable, repeated attempts fail closed.
 
-When ProtectMe writes config from a prompt, it shows a clean editable suggested host entry before saving.
+When ProtectMe writes config from a prompt, it shows a clean editable suggested host entry before saving. Prompt and `/protectme` edits serialize read-modify-write updates per config file so concurrent changes preserve existing mode and allow-list data.
 
 ## `/protectme` TUI panel
 
@@ -130,7 +138,7 @@ It also provides TUI actions to:
 - add a cleaned/editable allow-list entry,
 - remove entries from project or global config.
 
-Counts and effective config refresh after writes. Write failures are shown as errors without corrupting existing config files.
+Counts and effective config refresh after writes. Write failures are shown as errors without corrupting existing config files, and concurrent panel/prompt edits to the same config file are serialized.
 
 ## Blocked-attempt log
 
@@ -140,12 +148,12 @@ ProtectMe logs blocked attempts only at:
 .pi/agent/protectme_log.jsonl
 ```
 
-Each line is JSON and includes bounded metadata such as timestamp, cwd, tool name, host, attempt count, mode, config source metadata, outcome, and a redacted/truncated command snippet. Allowed requests are not logged.
+Each line is JSON and includes bounded metadata such as timestamp, cwd, tool name, host, attempt count, mode, config source metadata, outcome, redacted request targets, and a redacted/truncated command snippet. URL credentials, sensitive query values, cookies, authorization headers, API keys, and common auth flags are redacted before persistence. Allowed requests are not logged.
 
 ## Troubleshooting
 
 - Unexpected block: run `/protectme`, inspect the effective mode and counts, then add the intended host to project or global config.
-- Config warning: fix invalid JSON/schema or remove ignored invalid allow-list entries.
+- Config warning: fix invalid JSON/schema, unreadable files, or ignored invalid allow-list entries; while any loaded source is invalid or unreadable, ProtectMe uses `block` mode with an empty effective allow-list.
 - Prompt unavailable: use Pi TUI mode for confirmation prompts, or edit config manually.
 - Need to bypass protection temporarily: set project config to `{ "mode": "allow" }`.
 - Want a clean smoke test: run `pi --no-extensions -e .` from this repository.
@@ -155,6 +163,7 @@ Each line is JSON and includes bounded metadata such as timestamp, cwd, tool nam
 ```bash
 npm run typecheck
 npm run test
+npm run test:coverage
 npm run check:pack
 npm run validate
 ```

@@ -8,6 +8,9 @@ export {
 export {
   loadProtectMeConfig,
   mergeProtectMeConfigs,
+  mutateGlobalProtectMeConfig,
+  mutateProjectProtectMeConfig,
+  mutateProtectMeConfigFile,
   normalizeConfigAllowList,
   normalizeConfigAllowListEntry,
   parseProtectMeConfigText,
@@ -16,6 +19,7 @@ export {
   writeProjectProtectMeConfig,
   writeProtectMeConfigFile,
 } from "./config-loader.ts";
+export type { ProtectMeConfigMutation } from "./config-loader.ts";
 export {
   resolveBlockedAttemptLogPath,
   resolveGlobalConfigPath,

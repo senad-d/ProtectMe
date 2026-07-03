@@ -13,10 +13,14 @@ export {
   buildProtectMeFirstBlockGuidance,
   buildProtectMePromptDeniedBlockReason,
   buildProtectMePromptUnavailableBlockReason,
+  buildProtectMeUnsupportedNetworkOptionBlockReason,
 } from "./block-message.ts";
 export {
+  buildPublicSuffixHostWarning,
   isChildSubdomainHostKind,
   isExactOnlyHostKind,
+  isPublicSuffixDnsHost,
+  isSingleLabelDnsHost,
   normalizeHostInput,
 } from "./host-normalization.ts";
 export {

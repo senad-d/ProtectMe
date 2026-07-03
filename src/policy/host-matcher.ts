@@ -1,6 +1,9 @@
 import {
+  buildPublicSuffixHostWarning,
   isChildSubdomainHostKind,
   isExactOnlyHostKind,
+  isPublicSuffixDnsHost,
+  isSingleLabelDnsHost,
   normalizeHostInput,
   type HostNormalizationWarning,
   type NormalizedHostKind,
@@ -34,6 +37,10 @@ export function normalizeAllowListEntries(entries: string[]): NormalizedAllowLis
     const result = normalizeHostInput(entry);
     warnings.push(...result.warnings);
     if (!result.host || !result.kind || seenHosts.has(result.host)) continue;
+    if (isPublicSuffixDnsHost(result.host, result.kind)) {
+      warnings.push(buildPublicSuffixHostWarning(entry));
+      continue;
+    }
 
     seenHosts.add(result.host);
     normalizedEntries.push({ input: entry, host: result.host, kind: result.kind });
@@ -92,6 +99,8 @@ export function doesAllowEntryMatchHost(
   if (requestHost === allowHost) return true;
   if (isExactOnlyHostKind(allowKind) || isExactOnlyHostKind(requestKind)) return false;
   if (!isChildSubdomainHostKind(allowKind)) return false;
+  if (isSingleLabelDnsHost(allowHost, allowKind)) return false;
+  if (isPublicSuffixDnsHost(allowHost, allowKind)) return false;
 
   return requestHost.endsWith(`.${allowHost}`);
 }

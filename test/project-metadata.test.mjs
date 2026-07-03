@@ -20,16 +20,32 @@ test("package metadata no longer exposes template rename instructions", () => {
 test("preparation specs are present and implementation backlog remains available", async () => {
   const specsUrl = new URL("../specs/", import.meta.url);
   const files = (await readdir(specsUrl)).filter((name) => name.endsWith(".md")).sort();
-
-  assert.deepEqual(files, [
+  const requiredSpecs = [
     "spec-protectme-architecture.md",
     "spec-protectme-guidelines.md",
     "spec-protectme-tasks.md",
-  ]);
+  ];
+
+  for (const specFile of requiredSpecs) assert.ok(files.includes(specFile), `${specFile} should exist`);
+  assert.ok(files.every((name) => name.startsWith("spec-") && name.endsWith(".md")));
 
   const taskSpec = await readFile(new URL("../specs/spec-protectme-tasks.md", import.meta.url), "utf8");
   assert.match(taskSpec, /### 1\. Replace preparation placeholder with extension module registrations/);
-  assert.match(taskSpec, /- \[ \] /);
+  assert.match(taskSpec, /- \[[ x]\] /);
+});
+
+test("Sonar workflow coverage script exists and matches configured LCOV report", async () => {
+  const sonarWorkflow = await readFile(new URL("../.github/workflows/sonar.yml", import.meta.url), "utf8");
+  const sonarProperties = await readFile(new URL("../sonar-project.properties", import.meta.url), "utf8");
+  const sonarScriptNames = extractNpmRunScripts(sonarWorkflow);
+
+  assert.ok(sonarScriptNames.includes("test:coverage"));
+  for (const scriptName of sonarScriptNames) {
+    assert.equal(typeof packageJson.scripts?.[scriptName], "string", `package.json should define ${scriptName}`);
+  }
+
+  assert.match(packageJson.scripts["test:coverage"], /scripts\/run-test-coverage\.mjs/);
+  assert.match(sonarProperties, /^sonar\.javascript\.lcov\.reportPaths=coverage\/lcov\.info$/m);
 });
 
 test("documentation includes implemented config schema and isolated smoke command", async () => {
@@ -42,3 +58,7 @@ test("documentation includes implemented config schema and isolated smoke comman
   assert.match(smokeTest, /pi --no-extensions -e \./);
   assert.match(smokeTest, /\/protectme/);
 });
+
+function extractNpmRunScripts(workflowText) {
+  return [...workflowText.matchAll(/\brun:\s*npm run ([\w:-]+)/gu)].map((match) => match[1]);
+}

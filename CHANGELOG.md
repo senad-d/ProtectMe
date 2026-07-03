@@ -10,13 +10,20 @@
 - Added ProtectMe config types, deterministic path helpers, and missing-config defaults.
 - Implemented config JSON parsing, validation, merge order, allow-list normalization, and write-back helpers.
 - Implemented host normalization and allow-list matching helpers with warning metadata for ignored invalid entries.
+- Prevented public suffix and unintended single-label allow-list entries from authorizing arbitrary child domains.
+- Enforced fail-closed effective config behavior whenever any loaded global or trusted-project config is invalid or unreadable.
+- Restored automated validation metadata checks and added a dependency-free `test:coverage` script that emits `coverage/lcov.info` for Sonar.
+- Serialized ProtectMe config mutations for prompt and `/protectme` edits, with unique temporary write paths for same-millisecond writes.
 - Added clean blocked-host prompt suggestion helpers using registrable-domain detection with exact-host fallbacks.
 - Implemented bash request command extraction for supported `curl`, `wget`, `http`, and `https` invocations.
+- Hardened bash request extraction for approved wrappers, proxy/resolver option destinations, and fail-closed static config/input-file sources.
 - Implemented blocked-attempt JSONL logging helpers with bounded, redacted command snippets.
+- Expanded blocked-attempt log redaction for URL credentials, sensitive query values, cookies, API keys, and auth flags.
 - Registered first-attempt `tool_call` blocking for disallowed bash network requests with logging and agent guidance.
 - Added second-attempt ProtectMe prompts for allow-once, project/global allow-list writes, keep-blocked, and no-UI fail-closed outcomes.
 - Verified `mode: "allow"` bypass behavior for supported bash request CLIs without prompts or blocked-attempt logs.
 - Added session lifecycle handling that resets ProtectMe attempt counters, shows mode/site-count status, reports config warnings, and clears status on shutdown.
+- Honored Pi project trust before loading project ProtectMe config, with ignored-project status in session and TUI surfaces.
 - Added the initial `/protectme` TUI information panel with responsive wide, narrow, and tiny layouts for config paths, mode, site counts, and recent blocked hosts.
 - Added `/protectme` TUI editing actions for write-target selection, mode toggles, project/global allow-list additions, removals, refreshes, and safe write-error reporting.
 - Replaced preparation-phase documentation with implemented user guidance for installation, config schema, merge behavior, matching rules, block/prompt flow, `/protectme`, logs, validation, smoke testing, and security-sensitive behavior.

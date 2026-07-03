@@ -6,6 +6,8 @@ import test from "node:test";
 
 import {
   loadProtectMeConfig,
+  mutateGlobalProtectMeConfig,
+  mutateProjectProtectMeConfig,
   parseProtectMeConfigText,
   resolveProtectMeConfigPaths,
   writeGlobalProtectMeConfig,
@@ -52,6 +54,54 @@ test("project allow mode overrides global block mode", async () => {
   assert.equal(result.effective.modeSource, "project");
   assert.equal(result.globalConfig.config?.mode, "block");
   assert.equal(result.projectConfig.config?.mode, "allow");
+});
+
+test("malformed mixed-source configs force fail-closed effective config", async () => {
+  const malformedProjectPaths = createCasePaths("malformed-project-over-global-allow");
+  await writeJsonConfig(malformedProjectPaths.globalConfigPath, { mode: "allow", allowList: ["global.example.com"] });
+  await writeRawConfig(malformedProjectPaths.projectConfigPath, "{");
+
+  const malformedProjectResult = await loadProtectMeConfig(malformedProjectPaths);
+
+  assert.equal(malformedProjectResult.globalConfig.status, "valid");
+  assert.equal(malformedProjectResult.projectConfig.status, "invalid");
+  assertFailClosedEffectiveConfig(malformedProjectResult, /project config invalid/u);
+
+  const malformedGlobalPaths = createCasePaths("malformed-global-before-project-allow");
+  await writeRawConfig(malformedGlobalPaths.globalConfigPath, "{");
+  await writeJsonConfig(malformedGlobalPaths.projectConfigPath, { mode: "allow", allowList: ["project.example.com"] });
+
+  const malformedGlobalResult = await loadProtectMeConfig(malformedGlobalPaths);
+
+  assert.equal(malformedGlobalResult.globalConfig.status, "invalid");
+  assert.equal(malformedGlobalResult.projectConfig.status, "valid");
+  assert.equal(malformedGlobalResult.projectConfig.config?.mode, "allow");
+  assertFailClosedEffectiveConfig(malformedGlobalResult, /global config invalid/u);
+});
+
+test("unreadable mixed-source configs force fail-closed effective config", async () => {
+  const unreadableProjectPaths = createCasePaths("unreadable-project-over-global-allow");
+  await writeJsonConfig(unreadableProjectPaths.globalConfigPath, { mode: "allow", allowList: ["global.example.com"] });
+  await mkdir(dirname(unreadableProjectPaths.projectConfigPath), { recursive: true });
+  await mkdir(unreadableProjectPaths.projectConfigPath);
+
+  const unreadableProjectResult = await loadProtectMeConfig(unreadableProjectPaths);
+
+  assert.equal(unreadableProjectResult.globalConfig.status, "valid");
+  assert.equal(unreadableProjectResult.projectConfig.status, "unreadable");
+  assertFailClosedEffectiveConfig(unreadableProjectResult, /project config unreadable/u);
+
+  const unreadableGlobalPaths = createCasePaths("unreadable-global-before-project-allow");
+  await mkdir(dirname(unreadableGlobalPaths.globalConfigPath), { recursive: true });
+  await mkdir(unreadableGlobalPaths.globalConfigPath);
+  await writeJsonConfig(unreadableGlobalPaths.projectConfigPath, { mode: "allow", allowList: ["project.example.com"] });
+
+  const unreadableGlobalResult = await loadProtectMeConfig(unreadableGlobalPaths);
+
+  assert.equal(unreadableGlobalResult.globalConfig.status, "unreadable");
+  assert.equal(unreadableGlobalResult.projectConfig.status, "valid");
+  assert.equal(unreadableGlobalResult.projectConfig.config?.mode, "allow");
+  assertFailClosedEffectiveConfig(unreadableGlobalResult, /global config unreadable/u);
 });
 
 test("untrusted project config is ignored without broadening global protection", async () => {
@@ -147,6 +197,21 @@ test("invalid allowList entries are ignored with warning metadata", async () => 
   assert.match(result.effective.warnings.join("\n"), /global allowList entry ignored \("https:\/\/\/"\)/);
 });
 
+test("public suffix allowList entries are ignored while single-label entries stay exact", async () => {
+  const paths = createCasePaths("public-suffix-allow-list-entry");
+  await writeJsonConfig(paths.globalConfigPath, {
+    mode: "block",
+    allowList: ["com", "co.uk", "example.com", "internal-service", "localhost", "127.0.0.1", "2001:db8::1"],
+  });
+
+  const result = await loadProtectMeConfig(paths);
+
+  assert.equal(result.globalConfig.status, "valid");
+  assert.deepEqual(result.effective.allowList, ["example.com", "internal-service", "localhost", "127.0.0.1", "2001:db8::1"]);
+  assert.match(result.effective.warnings.join("\n"), /global allowList entry ignored \("com"\): Public suffix entries/);
+  assert.match(result.effective.warnings.join("\n"), /global allowList entry ignored \("co.uk"\): Public suffix entries/);
+});
+
 test("invalid JSON config fails closed with metadata", async () => {
   const paths = createCasePaths("invalid-json");
   await writeRawConfig(paths.globalConfigPath, "{");
@@ -200,6 +265,107 @@ test("write helpers create parent directories and use two-space JSON", async () 
   assert.equal(projectConfigText, '{\n  "mode": "allow",\n  "allowList": [\n    "Example.com"\n  ]\n}\n');
   assert.equal(globalConfigText, '{\n  "mode": "block",\n  "allowList": [\n    "Global.example"\n  ]\n}\n');
 });
+
+test("queued project config mutations preserve concurrent allow-list edits", async () => {
+  const paths = createCasePaths("queued-project-mutations");
+  await writeJsonConfig(paths.projectConfigPath, { mode: "block", allowList: ["initial.example.com"] });
+
+  await Promise.all([
+    mutateProjectProtectMeConfig(paths, appendConfigEntryAfterDelay("one.example.com")),
+    mutateProjectProtectMeConfig(paths, appendConfigEntryAfterDelay("two.example.com")),
+    mutateProjectProtectMeConfig(paths, appendConfigEntryAfterDelay("three.example.com")),
+  ]);
+
+  const result = await loadProtectMeConfig(paths);
+
+  assert.equal(result.projectConfig.status, "valid");
+  assert.deepEqual(result.projectConfig.config?.allowList, [
+    "initial.example.com",
+    "one.example.com",
+    "two.example.com",
+    "three.example.com",
+  ]);
+});
+
+test("queued global config mutations preserve mode and allow-list updates", async () => {
+  const paths = createCasePaths("queued-global-mutations");
+  await writeJsonConfig(paths.globalConfigPath, { mode: "block", allowList: ["initial.example.com"] });
+
+  await Promise.all([
+    mutateGlobalProtectMeConfig(paths, async (config) => {
+      await waitOneTurn();
+      return { ...config, mode: "allow" };
+    }),
+    mutateGlobalProtectMeConfig(paths, appendConfigEntryAfterDelay("queued.example.com")),
+  ]);
+
+  const result = await loadProtectMeConfig(paths);
+
+  assert.equal(result.globalConfig.status, "valid");
+  assert.deepEqual(result.globalConfig.config, {
+    mode: "allow",
+    allowList: ["initial.example.com", "queued.example.com"],
+  });
+});
+
+test("concurrent same-millisecond writes use unique temporary paths", async () => {
+  const paths = createCasePaths("same-millisecond-writes");
+  const originalDateNow = Date.now;
+  Date.now = () => 123456;
+
+  try {
+    await Promise.all([
+      writeProjectProtectMeConfig(paths, { mode: "block", allowList: ["one.example.com"] }),
+      writeProjectProtectMeConfig(paths, { mode: "allow", allowList: ["two.example.com"] }),
+      writeProjectProtectMeConfig(paths, { mode: "block", allowList: ["three.example.com"] }),
+    ]);
+  } finally {
+    Date.now = originalDateNow;
+  }
+
+  const result = await loadProtectMeConfig(paths);
+
+  assert.equal(result.projectConfig.status, "valid");
+  assert.ok(["block", "allow"].includes(result.projectConfig.config?.mode));
+  assert.equal(result.projectConfig.config?.allowList?.length, 1);
+});
+
+test("failed queued mutations leave existing config intact", async () => {
+  const paths = createCasePaths("failed-mutation");
+  await writeJsonConfig(paths.projectConfigPath, { mode: "block", allowList: ["safe.example.com"] });
+
+  await assert.rejects(
+    mutateProjectProtectMeConfig(paths, async () => {
+      await waitOneTurn();
+      throw new Error("planned failure");
+    }),
+    /planned failure/u,
+  );
+
+  const result = await loadProtectMeConfig(paths);
+
+  assert.deepEqual(result.projectConfig.config, { mode: "block", allowList: ["safe.example.com"] });
+});
+
+function appendConfigEntryAfterDelay(entry) {
+  return async (config) => {
+    await waitOneTurn();
+    return { ...config, allowList: [...(config.allowList ?? []), entry] };
+  };
+}
+
+async function waitOneTurn() {
+  await Promise.resolve();
+}
+
+function assertFailClosedEffectiveConfig(result, sourceWarningPattern) {
+  assert.equal(result.effective.mode, "block");
+  assert.equal(result.effective.modeSource, "default");
+  assert.deepEqual(result.effective.allowList, []);
+  assert.deepEqual(result.effective.allowListSources, []);
+  assert.match(result.effective.warnings.join("\n"), sourceWarningPattern);
+  assert.match(result.effective.warnings.join("\n"), /Effective config failed closed.*mode "block" and empty allowList/u);
+}
 
 function createCasePaths(name) {
   caseIndex += 1;

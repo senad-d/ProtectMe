@@ -47,7 +47,7 @@
 
 ## Ordered unchecked tasks
 
-- [ ] Honor Pi project trust before loading project ProtectMe config
+- [x] Honor Pi project trust before loading project ProtectMe config
 
 #### Why
 
@@ -68,7 +68,7 @@ ProtectMe can be installed as a user/global Pi extension, but `loadProtectMeConf
 - The TUI panel and session status make the ignored project-config state clear without leaking untrusted file contents.
 - The relevant tests prove both trusted and untrusted project behavior, and `npm run typecheck`, `npm run test`, and `npm run lint:eslint` pass.
 
-- [ ] Harden supported bash request extraction against wrapper and option bypasses
+- [x] Harden supported bash request extraction against wrapper and option bypasses
 
 #### Why
 
@@ -88,7 +88,7 @@ ProtectMe can be installed as a user/global Pi extension, but `loadProtectMeConf
 - Existing non-network URL literal behavior remains unchanged.
 - Focused extractor and network-guard tests cover the new bypass cases, and the full validation commands pass.
 
-- [ ] Redact sensitive blocked-attempt log data beyond command snippets
+- [x] Redact sensitive blocked-attempt log data beyond command snippets
 
 #### Why
 
@@ -108,7 +108,7 @@ ProtectMe can be installed as a user/global Pi extension, but `loadProtectMeConf
 - Existing log creation, truncation, and allowed-request no-log behavior still pass.
 - The relevant security-focused tests and `npm run test` pass.
 
-- [ ] Prevent overly broad allow-list entries from matching public suffixes or unintended single-label domains
+- [x] Prevent overly broad allow-list entries from matching public suffixes or unintended single-label domains
 
 #### Why
 
@@ -129,7 +129,7 @@ ProtectMe can be installed as a user/global Pi extension, but `loadProtectMeConf
 - Invalid or ignored entries produce actionable warning metadata.
 - Host matching, config loading, and prompt-suggestion tests pass.
 
-- [ ] Define and enforce mixed-source invalid-config fail-closed behavior
+- [x] Define and enforce mixed-source invalid-config fail-closed behavior
 
 #### Why
 
@@ -149,7 +149,7 @@ Tests prove that a sole invalid config falls back to block mode, but there is no
 - Warnings remain bounded and actionable.
 - `npm run typecheck` and `npm run test` pass.
 
-- [ ] Restore automated validation by fixing metadata-test and coverage-script drift
+- [x] Restore automated validation by fixing metadata-test and coverage-script drift
 
 #### Why
 
@@ -169,7 +169,7 @@ Tests prove that a sole invalid config falls back to block mode, but there is no
 - `npm run validate` passes locally or a precise external-service blocker is documented.
 - The test remains independently reviewable and does not require weakening coverage of package metadata.
 
-- [ ] Serialize ProtectMe config read-modify-write updates
+- [x] Serialize ProtectMe config read-modify-write updates
 
 #### Why
 

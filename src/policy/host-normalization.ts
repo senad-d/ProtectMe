@@ -1,7 +1,9 @@
 import { isIP } from "node:net";
 
+import { parse } from "tldts";
+
 export type NormalizedHostKind = "dns" | "ip" | "localhost";
-export type HostNormalizationWarningReason = "empty" | "parse_failed" | "invalid_host";
+export type HostNormalizationWarningReason = "empty" | "parse_failed" | "invalid_host" | "public_suffix";
 
 export interface HostNormalizationWarning {
   input: string;
@@ -32,6 +34,24 @@ export function isExactOnlyHostKind(kind: NormalizedHostKind): boolean {
 
 export function isChildSubdomainHostKind(kind: NormalizedHostKind): boolean {
   return kind === "dns";
+}
+
+export function isSingleLabelDnsHost(host: string, kind: NormalizedHostKind): boolean {
+  return kind === "dns" && !host.includes(".");
+}
+
+export function isPublicSuffixDnsHost(host: string, kind: NormalizedHostKind): boolean {
+  if (kind !== "dns") return false;
+
+  return detectPublicSuffix(host) === host;
+}
+
+export function buildPublicSuffixHostWarning(input: string): HostNormalizationWarning {
+  return {
+    input,
+    reason: "public_suffix",
+    message: "Public suffix entries such as com or co.uk cannot be used as allow-list entries.",
+  };
 }
 
 function extractHostCandidate(input: string): string | null {
@@ -133,6 +153,22 @@ function isValidDnsLabel(label: string): boolean {
   if (label.length < 1 || label.length > 63) return false;
 
   return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label);
+}
+
+function detectPublicSuffix(host: string): string | null {
+  try {
+    const result = parse(host, {
+      allowPrivateDomains: true,
+      detectIp: false,
+      extractHostname: false,
+      validateHostname: true,
+    });
+    const isKnownPublicSuffix = result.isIcann === true || result.isPrivate === true;
+
+    return isKnownPublicSuffix ? result.publicSuffix : null;
+  } catch {
+    return null;
+  }
 }
 
 function buildHostNormalizationFailure(

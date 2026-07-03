@@ -1,6 +1,12 @@
 import { getDomain } from "tldts";
 
-import { normalizeHostInput, type HostNormalizationWarning, type NormalizedHostKind } from "./host-normalization.ts";
+import {
+  buildPublicSuffixHostWarning,
+  isPublicSuffixDnsHost,
+  normalizeHostInput,
+  type HostNormalizationWarning,
+  type NormalizedHostKind,
+} from "./host-normalization.ts";
 
 export type PromptSuggestionSource = "registrable_domain" | "exact_host" | "invalid";
 
@@ -23,6 +29,17 @@ export function suggestCleanAllowListEntry(input: string): CleanPromptSuggestion
       editable: false,
       source: "invalid",
       warnings: normalizedHost.warnings,
+    };
+  }
+
+  if (isPublicSuffixDnsHost(normalizedHost.host, normalizedHost.kind)) {
+    return {
+      input,
+      blockedHost: normalizedHost.host,
+      suggestedEntry: null,
+      editable: false,
+      source: "invalid",
+      warnings: [...normalizedHost.warnings, buildPublicSuffixHostWarning(input)],
     };
   }
 

@@ -8,6 +8,10 @@ export function buildProtectMeFirstBlockGuidance(host: string): string {
   return `${EXTENSION_DISPLAY_NAME} blocked ${host}. Do not retry blindly. Continue with local or already allowed work, or ask the user if network access is necessary.`;
 }
 
+export function buildProtectMeUnsupportedNetworkOptionBlockReason(cli: string, rawTarget: string, detail: string): string {
+  return `${EXTENSION_DISPLAY_NAME} blocked ${cli} because ${rawTarget} cannot be inspected safely: ${detail}`;
+}
+
 export function buildProtectMePromptUnavailableBlockReason(host: string): string {
   return `${EXTENSION_DISPLAY_NAME} blocked repeated network request to ${host}. Confirmation is unavailable because this session has no UI, so the request failed closed.`;
 }

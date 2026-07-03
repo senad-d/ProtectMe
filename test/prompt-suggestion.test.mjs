@@ -56,6 +56,17 @@ test("localhost, IPs, and single-label hosts fall back to exact normalized host"
   });
 });
 
+test("public suffix prompt suggestion input returns warning metadata", () => {
+  const suggestion = suggestCleanAllowListEntry("co.uk");
+
+  assert.equal(suggestion.blockedHost, "co.uk");
+  assert.equal(suggestion.suggestedEntry, null);
+  assert.equal(suggestion.source, "invalid");
+  assert.equal(suggestion.editable, false);
+  assert.equal(suggestion.warnings.length, 1);
+  assert.equal(suggestion.warnings[0]?.reason, "public_suffix");
+});
+
 test("invalid prompt suggestion input returns warning metadata", () => {
   const suggestion = suggestCleanAllowListEntry("bad host");
 

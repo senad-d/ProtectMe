@@ -91,6 +91,38 @@ test("long command snippets are truncated and visibly marked", async () => {
   assert.deepEqual(lines[0].commandSnippet, entry.commandSnippet);
 });
 
+test("blocked-attempt log entries redact sensitive URL, header, cookie, and auth-flag data", async () => {
+  const paths = createCasePaths("redacted");
+  const command = [
+    "curl --user alice:password-one --proxy-user proxy:password-two",
+    "-H 'Authorization: Bearer bearer-secret'",
+    "-H 'Cookie: session=cookie-secret; theme=light'",
+    "-H 'X-API-Key: api-secret'",
+    "https://user:password-three@example.com/path?token=query-secret&safe=ok",
+    "&& http --auth bob:password-four GET https://api.example.com/v1?api_key=query-key-secret",
+  ].join(" ");
+
+  await appendBlockedAttemptLog({
+    ...baseBlockedAttemptInput(paths),
+    command,
+    rawUrl: "https://user:password-three@example.com/path?token=query-secret&safe=ok",
+    normalizedUrl: "https://user:password-three@example.com/path?token=query-secret&safe=ok",
+  });
+
+  const lines = await readJsonLines(paths.blockedAttemptLogPath);
+  const serializedLine = JSON.stringify(lines[0]);
+
+  assert.equal(lines[0].commandSnippet.redacted, true);
+  assert.match(lines[0].commandSnippet.snippet, /\[REDACTED\]/u);
+  assert.match(lines[0].rawUrl, /\[REDACTED\]@example\.com/u);
+  assert.match(lines[0].rawUrl, /token=\[REDACTED\]/u);
+  assert.match(lines[0].normalizedUrl, /token=\[REDACTED\]/u);
+  assert.doesNotMatch(
+    serializedLine,
+    /password-one|password-two|password-three|password-four|bearer-secret|cookie-secret|api-secret|query-secret|query-key-secret/u,
+  );
+});
+
 test("command snippet metadata exposes truncation without file writes", () => {
   const metadata = buildCommandSnippetMetadata(`curl https://example.com/${"b".repeat(60)}`, 40);
 

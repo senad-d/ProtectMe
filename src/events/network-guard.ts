@@ -5,18 +5,21 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { EXTENSION_DISPLAY_NAME, EXTENSION_STATUS_KEY } from "../constants.ts";
 import {
   loadProtectMeConfig,
+  mutateGlobalProtectMeConfig,
+  mutateProjectProtectMeConfig,
   normalizeConfigAllowList,
   normalizeConfigAllowListEntry,
   type ParsedProtectMeConfig,
   type ProtectMeConfigFile,
   type ProtectMeConfigLoadResult,
+  type ProtectMeConfigMutation,
   type ProtectMeConfigPathInput,
   type ProtectMeConfigSourceMetadata,
-  writeGlobalProtectMeConfig,
-  writeProjectProtectMeConfig,
 } from "../config/index.ts";
 import {
   appendBlockedAttemptLog,
+  redactSensitiveLogText,
+  redactSensitiveLogValue,
   type AppendBlockedAttemptLogInput,
   type BlockedAttemptLogEntry,
   type BlockedAttemptLogOutcome,
@@ -27,6 +30,7 @@ import {
   buildProtectMeFirstBlockGuidance,
   buildProtectMePromptDeniedBlockReason,
   buildProtectMePromptUnavailableBlockReason,
+  buildProtectMeUnsupportedNetworkOptionBlockReason,
   extractToolCallNetworkRequestCandidates,
   matchAllowedHost,
   suggestCleanAllowListEntry,
@@ -54,8 +58,14 @@ export interface NetworkGuardDependencies {
   getHomeDir(): string;
   loadConfig(input: ProtectMeConfigPathInput): Promise<ProtectMeConfigLoadResult>;
   appendBlockedAttemptLog(input: AppendBlockedAttemptLogInput): Promise<BlockedAttemptLogEntry>;
-  writeProjectConfig(paths: Pick<ProtectMeConfigLoadResult["paths"], "projectConfigPath">, config: ProtectMeConfigFile): Promise<void>;
-  writeGlobalConfig(paths: Pick<ProtectMeConfigLoadResult["paths"], "globalConfigPath">, config: ProtectMeConfigFile): Promise<void>;
+  mutateProjectConfig(
+    paths: Pick<ProtectMeConfigLoadResult["paths"], "projectConfigPath">,
+    mutation: ProtectMeConfigMutation,
+  ): Promise<ProtectMeConfigFile>;
+  mutateGlobalConfig(
+    paths: Pick<ProtectMeConfigLoadResult["paths"], "globalConfigPath">,
+    mutation: ProtectMeConfigMutation,
+  ): Promise<ProtectMeConfigFile>;
   sendGuidance(message: string, options?: NetworkGuardGuidanceOptions): void;
 }
 
@@ -108,7 +118,7 @@ type ConfigPromptTarget = "project" | "global";
 
 interface ConfigWritePlan {
   ok: boolean;
-  config?: ProtectMeConfigFile;
+  entry?: string;
   reason?: string;
 }
 
@@ -127,8 +137,8 @@ export function createDefaultNetworkGuardDependencies(pi: ExtensionAPI): Network
     getHomeDir: homedir,
     loadConfig: loadProtectMeConfig,
     appendBlockedAttemptLog,
-    writeProjectConfig: writeProjectProtectMeConfig,
-    writeGlobalConfig: writeGlobalProtectMeConfig,
+    mutateProjectConfig: mutateProjectProtectMeConfig,
+    mutateGlobalConfig: mutateGlobalProtectMeConfig,
     sendGuidance(message, options) {
       pi.sendUserMessage(message, options);
     },
@@ -317,10 +327,19 @@ async function decideDisallowedRequest(
   request: DisallowedRequest,
   dependencies: NetworkGuardDependencies,
 ): Promise<NetworkGuardDecision> {
+  if (request.candidate.unsupportedReason) return buildUnsupportedNetworkOptionBlockDecision(request.candidate);
   if (request.attempt === 1) return buildFirstAttemptBlockDecision(request.candidate.host);
   if (!hasPromptUI(ctx)) return buildPromptUnavailableDecision(request.candidate.host);
 
   return promptForRepeatedBlockedRequest(ctx.ui, config, request, dependencies);
+}
+
+function buildUnsupportedNetworkOptionBlockDecision(candidate: BashNetworkRequestCandidate): BlockDecision {
+  return {
+    action: "block",
+    outcome: "blocked",
+    reason: buildProtectMeUnsupportedNetworkOptionBlockReason(candidate.cli, candidate.rawTarget, candidate.unsupportedReason ?? "unknown reason"),
+  };
 }
 
 function buildFirstAttemptBlockDecision(host: string): BlockDecision {
@@ -373,13 +392,13 @@ async function allowViaConfigWrite(
   const editedEntry = await ui.editor(buildAllowListEntryEditorTitle(target, request.candidate.host), suggestedEntry);
   const writePlan = buildConfigWritePlan(configSource, editedEntry);
 
-  if (!writePlan.ok || !writePlan.config) {
+  if (!writePlan.ok || !writePlan.entry) {
     notifyPromptFailure(ui, writePlan.reason ?? "No allow-list entry was confirmed.");
     return buildPromptDeniedDecision(request.candidate.host);
   }
 
   try {
-    await writeTargetConfig(target, config, writePlan.config, dependencies);
+    await mutateTargetConfig(target, config, writePlan.entry, dependencies);
   } catch (error) {
     const message = buildErrorMessage(error);
     notifyPromptFailure(ui, message);
@@ -454,7 +473,7 @@ function buildConfigWritePlan(configSource: ParsedProtectMeConfig, editedEntry: 
 
   return {
     ok: true,
-    config: appendAllowListEntry(configSource.config ?? {}, normalizedEntry),
+    entry: normalizedEntry,
   };
 }
 
@@ -481,18 +500,18 @@ function buildConfigFile(config: ProtectMeConfigFile, allowList: string[]): Prot
   return nextConfig;
 }
 
-async function writeTargetConfig(
+async function mutateTargetConfig(
   target: ConfigPromptTarget,
   config: ProtectMeConfigLoadResult,
-  configFile: ProtectMeConfigFile,
+  normalizedEntry: string,
   dependencies: NetworkGuardDependencies,
 ): Promise<void> {
   if (target === "project") {
-    await dependencies.writeProjectConfig(config.paths, configFile);
+    await dependencies.mutateProjectConfig(config.paths, (currentConfig) => appendAllowListEntry(currentConfig, normalizedEntry));
     return;
   }
 
-  await dependencies.writeGlobalConfig(config.paths, configFile);
+  await dependencies.mutateGlobalConfig(config.paths, (currentConfig) => appendAllowListEntry(currentConfig, normalizedEntry));
 }
 
 function notifyPromptFailure(ui: NetworkGuardPromptUI, message: string): void {
@@ -525,9 +544,9 @@ async function logBlockedRequest(
     logPath: config.paths.blockedAttemptLogPath,
     cwd: ctx.cwd,
     toolName: event.toolName,
-    command: extractCommandForLog(event.input),
-    rawUrl: request.candidate.rawTarget,
-    normalizedUrl: request.candidate.rawTarget,
+    command: redactSensitiveLogText(extractCommandForLog(event.input)),
+    rawUrl: redactSensitiveLogValue(request.candidate.rawTarget),
+    normalizedUrl: redactSensitiveLogValue(request.candidate.rawTarget),
     host: request.candidate.host,
     attempt: request.attempt,
     mode: config.effective.mode,

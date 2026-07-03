@@ -53,6 +53,21 @@ test("invalid host entries are ignored with warning metadata", () => {
   );
 });
 
+test("public suffix allow-list entries are ignored and cannot allow arbitrary child domains", () => {
+  const normalized = normalizeAllowListEntries(["com", "co.uk", "example.com"]);
+
+  assert.deepEqual(normalized.entries, ["example.com"]);
+  assert.deepEqual(
+    normalized.warnings.map((warning) => [warning.input, warning.reason]),
+    [
+      ["com", "public_suffix"],
+      ["co.uk", "public_suffix"],
+    ],
+  );
+  assert.equal(isHostAllowed("example.com", ["com"]), false);
+  assert.equal(isHostAllowed("api.example.co.uk", ["co.uk"]), false);
+});
+
 test("apex allow entries match themselves, paths, and child subdomains", () => {
   const allowList = ["example.com"];
 
@@ -70,6 +85,15 @@ test("child allow entries never allow parent domains", () => {
   assert.equal(isHostAllowed("v2.api.example2.com", allowList), true);
   assert.equal(isHostAllowed("example2.com", allowList), false);
   assert.equal(isHostAllowed("other.example2.com", allowList), false);
+});
+
+test("single-label non-localhost allow entries match exactly only", () => {
+  const allowList = ["internal-service"];
+
+  assert.equal(isHostAllowed("internal-service", allowList), true);
+  assert.equal(isHostAllowed("internal-service:8080/path", allowList), true);
+  assert.equal(isHostAllowed("api.internal-service", allowList), false);
+  assert.equal(isHostAllowed("v1.api.internal-service", allowList), false);
 });
 
 test("localhost and IP allow entries match exactly", () => {

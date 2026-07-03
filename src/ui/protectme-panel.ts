@@ -6,16 +6,17 @@ import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/
 
 import {
   loadProtectMeConfig,
+  mutateGlobalProtectMeConfig,
+  mutateProjectProtectMeConfig,
   normalizeConfigAllowList,
   normalizeConfigAllowListEntry,
   type ParsedProtectMeConfig,
   type ProtectMeConfigFile,
   type ProtectMeConfigLoadResult,
+  type ProtectMeConfigMutation,
   type ProtectMeConfigPathInput,
   type ProtectMeConfigSource,
   type ProtectMeMode,
-  writeGlobalProtectMeConfig,
-  writeProjectProtectMeConfig,
 } from "../config/index.ts";
 import { EXTENSION_DISPLAY_NAME, PROTECTME_COMMAND_NAME } from "../constants.ts";
 import { suggestCleanAllowListEntry } from "../policy/index.ts";
@@ -35,8 +36,14 @@ export interface ProtectMeCommandDependencies {
   getHomeDir(): string;
   loadConfig(input: ProtectMeConfigPathInput): Promise<ProtectMeConfigLoadResult>;
   readRecentBlockedHosts(logPath: string): Promise<string[]>;
-  writeProjectConfig(paths: Pick<ProtectMeConfigLoadResult["paths"], "projectConfigPath">, config: ProtectMeConfigFile): Promise<void>;
-  writeGlobalConfig(paths: Pick<ProtectMeConfigLoadResult["paths"], "globalConfigPath">, config: ProtectMeConfigFile): Promise<void>;
+  mutateProjectConfig(
+    paths: Pick<ProtectMeConfigLoadResult["paths"], "projectConfigPath">,
+    mutation: ProtectMeConfigMutation,
+  ): Promise<ProtectMeConfigFile>;
+  mutateGlobalConfig(
+    paths: Pick<ProtectMeConfigLoadResult["paths"], "globalConfigPath">,
+    mutation: ProtectMeConfigMutation,
+  ): Promise<ProtectMeConfigFile>;
 }
 
 export interface ProtectMePanelState {
@@ -118,8 +125,8 @@ export function createDefaultProtectMeCommandDependencies(): ProtectMeCommandDep
     getHomeDir: homedir,
     loadConfig: loadProtectMeConfig,
     readRecentBlockedHosts,
-    writeProjectConfig: writeProjectProtectMeConfig,
-    writeGlobalConfig: writeGlobalProtectMeConfig,
+    mutateProjectConfig: mutateProjectProtectMeConfig,
+    mutateGlobalConfig: mutateGlobalProtectMeConfig,
   };
 }
 
@@ -320,8 +327,8 @@ function buildProtectMePanelActionDependencies(
     ui: readPanelActionUI(ui),
     loadConfig: dependencies.loadConfig,
     readRecentBlockedHosts: dependencies.readRecentBlockedHosts,
-    writeProjectConfig: dependencies.writeProjectConfig,
-    writeGlobalConfig: dependencies.writeGlobalConfig,
+    mutateProjectConfig: dependencies.mutateProjectConfig,
+    mutateGlobalConfig: dependencies.mutateGlobalConfig,
   };
 }
 
@@ -371,9 +378,9 @@ async function toggleProtectMePanelMode(
   if (unsafeResult) return unsafeResult;
 
   const nextMode = getNextProtectMeMode(state.config.effective.mode);
-  const nextConfig = buildConfigWithMode(source.config ?? {}, nextMode);
+  const mutation = (currentConfig: ProtectMeConfigFile) => buildConfigWithMode(currentConfig, nextMode);
 
-  return saveProtectMePanelConfig(writeTarget, state, dependencies, nextConfig, `Saved ${writeTarget} mode ${nextMode}.`);
+  return saveProtectMePanelConfig(writeTarget, state, dependencies, mutation, `Saved ${writeTarget} mode ${nextMode}.`);
 }
 
 async function addProtectMePanelEntry(
@@ -394,9 +401,9 @@ async function addProtectMePanelEntry(
   const normalizedEntry = normalizeConfigAllowListEntry(editedEntry);
   if (!normalizedEntry) return failProtectMePanelAction(dependencies, `Invalid allow-list entry: ${JSON.stringify(editedEntry)}`);
 
-  const nextConfig = appendAllowListEntry(source.config ?? {}, normalizedEntry);
+  const mutation = (currentConfig: ProtectMeConfigFile) => appendAllowListEntry(currentConfig, normalizedEntry);
 
-  return saveProtectMePanelConfig(writeTarget, state, dependencies, nextConfig, `Saved ${normalizedEntry} to ${writeTarget} config.`);
+  return saveProtectMePanelConfig(writeTarget, state, dependencies, mutation, `Saved ${normalizedEntry} to ${writeTarget} config.`);
 }
 
 async function removeProtectMePanelEntry(
@@ -417,9 +424,9 @@ async function removeProtectMePanelEntry(
   const selectedEntry = await ui.select(`ProtectMe remove ${writeTarget} allow-list entry`, entries);
   if (!selectedEntry) return cancelProtectMePanelAction("Remove entry cancelled.");
 
-  const nextConfig = removeAllowListEntry(source.config ?? {}, selectedEntry);
+  const mutation = (currentConfig: ProtectMeConfigFile) => removeAllowListEntry(currentConfig, selectedEntry);
 
-  return saveProtectMePanelConfig(writeTarget, state, dependencies, nextConfig, `Removed ${selectedEntry} from ${writeTarget} config.`);
+  return saveProtectMePanelConfig(writeTarget, state, dependencies, mutation, `Removed ${selectedEntry} from ${writeTarget} config.`);
 }
 
 function hasPanelSelect(ui: ProtectMePanelActionUI | null): ui is ProtectMePanelActionUI & { select: NonNullable<ProtectMePanelActionUI["select"]> } {
@@ -500,11 +507,11 @@ async function saveProtectMePanelConfig(
   writeTarget: ProtectMePanelWriteTarget,
   state: ProtectMePanelState,
   dependencies: ProtectMePanelActionDependencies,
-  config: ProtectMeConfigFile,
+  mutation: ProtectMeConfigMutation,
   successMessage: string,
 ): Promise<ProtectMePanelActionResult> {
   try {
-    await writeTargetConfig(writeTarget, state.config, dependencies, config);
+    await mutateTargetConfig(writeTarget, state.config, dependencies, mutation);
     await refreshProtectMePanelState(state, dependencies);
     notifyProtectMePanelInfo(dependencies, successMessage);
 
@@ -516,18 +523,18 @@ async function saveProtectMePanelConfig(
   }
 }
 
-async function writeTargetConfig(
+async function mutateTargetConfig(
   writeTarget: ProtectMePanelWriteTarget,
   config: ProtectMeConfigLoadResult,
   dependencies: ProtectMePanelActionDependencies,
-  configFile: ProtectMeConfigFile,
+  mutation: ProtectMeConfigMutation,
 ): Promise<void> {
   if (writeTarget === "project") {
-    await dependencies.writeProjectConfig(config.paths, configFile);
+    await dependencies.mutateProjectConfig(config.paths, mutation);
     return;
   }
 
-  await dependencies.writeGlobalConfig(config.paths, configFile);
+  await dependencies.mutateGlobalConfig(config.paths, mutation);
 }
 
 async function refreshProtectMePanelState(

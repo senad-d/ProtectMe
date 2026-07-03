@@ -185,10 +185,12 @@ test("ProtectMe panel write failures show errors and keep loaded config unchange
     async readRecentBlockedHosts() {
       return [];
     },
-    async writeProjectConfig() {
+    async mutateProjectConfig() {
       throw new Error("disk full");
     },
-    async writeGlobalConfig() {},
+    async mutateGlobalConfig(_paths, mutation) {
+      return mutation({});
+    },
   });
 
   component.handleInput("a");
@@ -286,13 +288,17 @@ function createEditablePanel(config = buildEditableConfigResult()) {
       assert.equal(logPath, `${cwd}/.pi/agent/protectme_log.jsonl`);
       return state.recentBlockedHosts;
     },
-    async writeProjectConfig(paths, configFile) {
+    async mutateProjectConfig(paths, mutation) {
+      const configFile = await mutation(currentConfig.projectConfig.config ?? {});
       projectWrites.push({ paths, config: configFile });
       currentConfig = buildEditableConfigResult(currentConfig.globalConfig.config, configFile);
+      return configFile;
     },
-    async writeGlobalConfig(paths, configFile) {
+    async mutateGlobalConfig(paths, mutation) {
+      const configFile = await mutation(currentConfig.globalConfig.config ?? {});
       globalWrites.push({ paths, config: configFile });
       currentConfig = buildEditableConfigResult(configFile, currentConfig.projectConfig.config);
+      return configFile;
     },
   };
   const component = new ProtectMePanelComponent(state, plainTheme, () => {}, () => {}, actionDependencies);
@@ -378,7 +384,7 @@ function buildParsedConfigSource(source, path, config) {
 }
 
 async function flushPanelActions() {
-  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+  for (let index = 0; index < 20; index += 1) await Promise.resolve();
 }
 
 function buildPanelState() {
@@ -483,8 +489,12 @@ function createFakeCommandDependencies(config = buildConfigResult()) {
       assert.equal(logPath, config.paths.blockedAttemptLogPath);
       return ["api.example.com"];
     },
-    async writeProjectConfig() {},
-    async writeGlobalConfig() {},
+    async mutateProjectConfig(_paths, mutation) {
+      return mutation({});
+    },
+    async mutateGlobalConfig(_paths, mutation) {
+      return mutation({});
+    },
   };
 }
 

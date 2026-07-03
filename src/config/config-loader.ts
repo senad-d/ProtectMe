@@ -16,6 +16,10 @@ import {
 
 const CONFIG_JSON_INDENT = 2;
 const PROJECT_CONFIG_IGNORED_MESSAGE = "Project config was not read because the current project is not trusted.";
+const configMutationQueues = new Map<string, Promise<unknown>>();
+let temporaryConfigWriteCounter = 0;
+
+export type ProtectMeConfigMutation = (config: ProtectMeConfigFile) => ProtectMeConfigFile | Promise<ProtectMeConfigFile>;
 
 export function normalizeConfigAllowListEntry(rawEntry: string): string | null {
   return normalizeHostInput(rawEntry).host;
@@ -60,10 +64,13 @@ export function mergeProtectMeConfigs(
   projectConfig: ParsedProtectMeConfig,
 ): EffectiveProtectMeConfig {
   const configSources = [globalConfig, projectConfig];
+  const configWarnings = collectConfigWarnings(configSources);
+  if (hasFailClosedConfigSource(configSources)) return buildFailClosedEffectiveConfig(configSources, configWarnings);
+
   const mode = resolveEffectiveMode(globalConfig, projectConfig);
   const modeSource = resolveEffectiveModeSource(globalConfig, projectConfig);
   const allowListMerge = mergeAllowListEntries(globalConfig, projectConfig);
-  const warnings = [...collectConfigWarnings(configSources), ...allowListMerge.warnings];
+  const warnings = [...configWarnings, ...allowListMerge.warnings];
 
   return {
     mode,
@@ -91,12 +98,29 @@ export async function loadProtectMeConfig(input: ProtectMeConfigPathInput | Prot
 }
 
 export async function writeProtectMeConfigFile(path: string, config: ProtectMeConfigFile): Promise<void> {
-  const serializedConfig = `${JSON.stringify(config, null, CONFIG_JSON_INDENT)}\n`;
-  const temporaryPath = buildTemporaryConfigPath(path);
+  await writeProtectMeConfigFileUnlocked(path, config);
+}
 
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(temporaryPath, serializedConfig, "utf8");
-  await rename(temporaryPath, path);
+export async function mutateProtectMeConfigFile(
+  source: ProtectMeConfigSource,
+  path: string,
+  mutation: ProtectMeConfigMutation,
+): Promise<ProtectMeConfigFile> {
+  return enqueueConfigMutation(path, () => mutateProtectMeConfigFileUnlocked(source, path, mutation));
+}
+
+export async function mutateGlobalProtectMeConfig(
+  paths: Pick<ProtectMeConfigPaths, "globalConfigPath">,
+  mutation: ProtectMeConfigMutation,
+): Promise<ProtectMeConfigFile> {
+  return mutateProtectMeConfigFile("global", paths.globalConfigPath, mutation);
+}
+
+export async function mutateProjectProtectMeConfig(
+  paths: Pick<ProtectMeConfigPaths, "projectConfigPath">,
+  mutation: ProtectMeConfigMutation,
+): Promise<ProtectMeConfigFile> {
+  return mutateProtectMeConfigFile("project", paths.projectConfigPath, mutation);
 }
 
 export async function writeGlobalProtectMeConfig(
@@ -244,6 +268,38 @@ function hasConfigWarning(configSource: ParsedProtectMeConfig): boolean {
   return configSource.status === "invalid" || configSource.status === "unreadable" || configSource.status === "ignored";
 }
 
+function hasFailClosedConfigSource(configSources: ParsedProtectMeConfig[]): boolean {
+  return configSources.some(isFailClosedConfigSource);
+}
+
+function isFailClosedConfigSource(configSource: ParsedProtectMeConfig): boolean {
+  return configSource.status === "invalid" || configSource.status === "unreadable";
+}
+
+function buildFailClosedEffectiveConfig(
+  configSources: ParsedProtectMeConfig[],
+  warnings: string[],
+): EffectiveProtectMeConfig {
+  return {
+    mode: DEFAULT_PROTECTME_MODE,
+    allowList: [],
+    modeSource: "default",
+    allowListSources: [],
+    configSources,
+    warnings: [...warnings, buildFailClosedConfigWarning(configSources)],
+  };
+}
+
+function buildFailClosedConfigWarning(configSources: ParsedProtectMeConfig[]): string {
+  const failedSources = configSources.filter(isFailClosedConfigSource).map(formatFailClosedSource);
+
+  return `Effective config failed closed because ${failedSources.join(" and ")}; mode "block" and empty allowList are in use.`;
+}
+
+function formatFailClosedSource(configSource: ParsedProtectMeConfig): string {
+  return `${configSource.source} config ${configSource.status}`;
+}
+
 function resolveEffectiveMode(
   globalConfig: ParsedProtectMeConfig,
   projectConfig: ParsedProtectMeConfig,
@@ -317,6 +373,56 @@ function shouldReadProjectConfig(input: ProtectMeConfigPathInput | ProtectMeConf
   return input.projectTrusted !== false;
 }
 
+async function writeProtectMeConfigFileUnlocked(path: string, config: ProtectMeConfigFile): Promise<void> {
+  const serializedConfig = `${JSON.stringify(config, null, CONFIG_JSON_INDENT)}\n`;
+  const temporaryPath = buildTemporaryConfigPath(path);
+
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(temporaryPath, serializedConfig, "utf8");
+  await rename(temporaryPath, path);
+}
+
+async function mutateProtectMeConfigFileUnlocked(
+  source: ProtectMeConfigSource,
+  path: string,
+  mutation: ProtectMeConfigMutation,
+): Promise<ProtectMeConfigFile> {
+  const currentSource = await readProtectMeConfigSource(source, path);
+  assertConfigSourceCanMutate(currentSource);
+
+  const nextConfig = await mutation(currentSource.config ?? {});
+  await writeProtectMeConfigFileUnlocked(path, nextConfig);
+
+  return nextConfig;
+}
+
+async function enqueueConfigMutation<T>(path: string, operation: () => Promise<T>): Promise<T> {
+  const previousOperation = configMutationQueues.get(path) ?? Promise.resolve();
+  const nextOperation = previousOperation.then(operation, operation);
+  const cleanupOperation = nextOperation.then(ignoreQueueResult, ignoreQueueResult);
+
+  configMutationQueues.set(path, cleanupOperation);
+
+  try {
+    return await nextOperation;
+  } finally {
+    if (configMutationQueues.get(path) === cleanupOperation) configMutationQueues.delete(path);
+  }
+}
+
+function assertConfigSourceCanMutate(configSource: ParsedProtectMeConfig): void {
+  if (configSource.status !== "invalid" && configSource.status !== "unreadable") return;
+
+  const detail = configSource.message ? `: ${configSource.message}` : "";
+  throw new Error(`${configSource.source} config is ${configSource.status}${detail}`);
+}
+
+function ignoreQueueResult(): void {
+  // Keep the queue chain alive after either success or failure.
+}
+
 function buildTemporaryConfigPath(path: string): string {
-  return `${path}.${process.pid}.${Date.now()}.tmp`;
+  temporaryConfigWriteCounter += 1;
+
+  return `${path}.${process.pid}.${Date.now()}.${temporaryConfigWriteCounter}.tmp`;
 }
