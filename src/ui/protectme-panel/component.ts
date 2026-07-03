@@ -1,10 +1,24 @@
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 
-import { executeProtectMePanelAction } from "./actions.ts";
-import { buildProtectMePanelSettings, clamp, renderProtectMePanel } from "./rendering.ts";
+import {
+  buildProtectMeConfigEditSourceError,
+  normalizeConfigAllowListEntry,
+  planProtectMeConfigAllowListAppend,
+  selectProtectMeConfigEditSource,
+  type ProtectMeMode,
+} from "../../config/index.ts";
+import { suggestCleanAllowListEntry } from "../../policy/index.ts";
+import { saveProtectMePanelAllowListEntry, saveProtectMePanelMode } from "./actions.ts";
+import {
+  buildProtectMePanelSettings,
+  clamp,
+  renderProtectMePanel,
+  renderProtectMePanelDialog,
+} from "./rendering.ts";
 import type {
-  ProtectMePanelAction,
   ProtectMePanelActionDependencies,
+  ProtectMePanelActionResult,
+  ProtectMePanelDialog,
   ProtectMePanelState,
   ProtectMePanelStatusMessage,
   ProtectMePanelTheme,
@@ -12,6 +26,36 @@ import type {
 } from "./types.ts";
 
 const DEFAULT_WRITE_TARGET: ProtectMePanelWriteTarget = "project";
+const APPLY_MODE_VALUE = "apply-mode";
+const SAVE_ENTRY_VALUE = "save-entry";
+const CANCEL_VALUE = "cancel";
+
+type ProtectMePanelView = EntryConfirmView | EntryInputView | MainView | ModeConfirmView | RecentHostsView;
+
+interface MainView {
+  kind: "main";
+}
+
+interface ModeConfirmView {
+  kind: "modeConfirm";
+  nextMode: ProtectMeMode;
+  selectedOptionIndex: number;
+}
+
+interface EntryInputView {
+  kind: "entryInput";
+  value: string;
+}
+
+interface EntryConfirmView {
+  kind: "entryConfirm";
+  entry: string;
+  selectedOptionIndex: number;
+}
+
+interface RecentHostsView {
+  kind: "recentHosts";
+}
 
 export class ProtectMePanelComponent {
   private readonly state: ProtectMePanelState;
@@ -20,11 +64,12 @@ export class ProtectMePanelComponent {
   private readonly requestRender: () => void;
   private readonly actionDependencies: ProtectMePanelActionDependencies | undefined;
   private selectedSettingIndex = 0;
-  private writeTarget: ProtectMePanelWriteTarget = DEFAULT_WRITE_TARGET;
+  private readonly writeTarget: ProtectMePanelWriteTarget = DEFAULT_WRITE_TARGET;
   private actionInFlight = false;
   private statusMessage: ProtectMePanelStatusMessage | undefined;
   private cachedWidth: number | undefined;
   private cachedLines: string[] | undefined;
+  private view: ProtectMePanelView = { kind: "main" };
 
   constructor(
     state: ProtectMePanelState,
@@ -41,19 +86,27 @@ export class ProtectMePanelComponent {
   }
 
   handleInput(data: string): void {
-    if (matchesKey(data, Key.escape) || data === "q" || data === "Q") {
-      this.done();
+    if (this.view.kind === "main") {
+      this.handleMainInput(data);
       return;
     }
 
-    if (matchesKey(data, Key.up)) this.moveSelection(-1);
-    if (matchesKey(data, Key.down)) this.moveSelection(1);
-    if (matchesKey(data, Key.enter)) this.runSelectedAction();
-    if (data === "p" || data === "P") this.setWriteTarget("project");
-    if (data === "g" || data === "G") this.setWriteTarget("global");
-    if (data === "m" || data === "M") this.runAction("toggleMode");
-    if (data === "a" || data === "A") this.runAction("addEntry");
-    if (data === "r" || data === "R") this.runAction("removeEntry");
+    if (this.view.kind === "modeConfirm") {
+      this.handleModeConfirmInput(data, this.view);
+      return;
+    }
+
+    if (this.view.kind === "entryInput") {
+      this.handleEntryInput(data, this.view);
+      return;
+    }
+
+    if (this.view.kind === "entryConfirm") {
+      this.handleEntryConfirmInput(data, this.view);
+      return;
+    }
+
+    if (this.view.kind === "recentHosts") this.handleRecentHostsInput(data);
   }
 
   render(width: number): string[] {
@@ -61,7 +114,7 @@ export class ProtectMePanelComponent {
     if (this.cachedLines && this.cachedWidth === safeWidth) return this.cachedLines;
 
     this.cachedWidth = safeWidth;
-    this.cachedLines = renderProtectMePanel(safeWidth, this.state, this.selectedSettingIndex, this.writeTarget, this.statusMessage, this.theme);
+    this.cachedLines = this.renderFresh(safeWidth);
 
     return this.cachedLines;
   }
@@ -69,6 +122,85 @@ export class ProtectMePanelComponent {
   invalidate(): void {
     this.cachedWidth = undefined;
     this.cachedLines = undefined;
+  }
+
+  private renderFresh(width: number): string[] {
+    if (this.view.kind === "main") {
+      return renderProtectMePanel(width, this.state, this.selectedSettingIndex, this.writeTarget, this.statusMessage, this.theme);
+    }
+
+    return renderProtectMePanelDialog(width, this.state, buildDialog(this.view, this.state), this.statusMessage, this.theme);
+  }
+
+  private handleMainInput(data: string): void {
+    if (isCancelInput(data) || isQuitInput(data)) {
+      this.done();
+      return;
+    }
+
+    if (matchesKey(data, Key.up)) this.moveSelection(-1);
+    if (matchesKey(data, Key.down)) this.moveSelection(1);
+    if (matchesKey(data, Key.enter)) this.runSelectedAction();
+  }
+
+  private handleModeConfirmInput(data: string, view: ModeConfirmView): void {
+    if (isCancelInput(data)) {
+      this.cancelToMain("Mode change cancelled.");
+      return;
+    }
+
+    if (isQuitInput(data)) {
+      this.done();
+      return;
+    }
+
+    if (matchesKey(data, Key.up)) this.moveDialogOption(view, -1);
+    if (matchesKey(data, Key.down)) this.moveDialogOption(view, 1);
+    if (matchesKey(data, Key.enter)) this.resolveModeConfirmation(view);
+  }
+
+  private handleEntryInput(data: string, view: EntryInputView): void {
+    if (isCancelInput(data)) {
+      this.cancelToMain("Allow-list edit cancelled.");
+      return;
+    }
+
+    if (matchesKey(data, Key.enter)) {
+      this.reviewEntryInput(view);
+      return;
+    }
+
+    if (matchesKey(data, Key.backspace)) {
+      this.updateEntryInput(view.value.slice(0, -1));
+      return;
+    }
+
+    this.appendEntryInput(data, view);
+  }
+
+  private handleEntryConfirmInput(data: string, view: EntryConfirmView): void {
+    if (isCancelInput(data)) {
+      this.cancelToMain("Allow-list edit cancelled.");
+      return;
+    }
+
+    if (isQuitInput(data)) {
+      this.done();
+      return;
+    }
+
+    if (matchesKey(data, Key.up)) this.moveDialogOption(view, -1);
+    if (matchesKey(data, Key.down)) this.moveDialogOption(view, 1);
+    if (matchesKey(data, Key.enter)) this.resolveEntryConfirmation(view);
+  }
+
+  private handleRecentHostsInput(data: string): void {
+    if (isCancelInput(data) || matchesKey(data, Key.enter)) {
+      this.returnToMain();
+      return;
+    }
+
+    if (isQuitInput(data)) this.done();
   }
 
   private moveSelection(delta: number): void {
@@ -84,43 +216,283 @@ export class ProtectMePanelComponent {
     const selectedSetting = settings[clamp(this.selectedSettingIndex, 0, Math.max(0, settings.length - 1))];
     if (!selectedSetting?.action) return;
 
-    this.runAction(selectedSetting.action);
+    if (selectedSetting.action === "toggleMode") this.startModeConfirmation();
+    if (selectedSetting.action === "addEntry") this.startEntryEditor();
+    if (selectedSetting.action === "showRecentBlockedHosts") this.openRecentHosts();
   }
 
-  private runAction(action: ProtectMePanelAction): void {
-    if (this.actionInFlight) return;
+  private startModeConfirmation(): void {
+    const sourceError = this.readCurrentSourceError();
+    if (sourceError) {
+      this.setStatus(sourceError, "error");
+      return;
+    }
+
+    this.statusMessage = undefined;
+    this.view = {
+      kind: "modeConfirm",
+      nextMode: getNextProtectMeMode(this.state.config.effective.mode),
+      selectedOptionIndex: 0,
+    };
+    this.invalidateAndRender();
+  }
+
+  private startEntryEditor(): void {
+    const sourceError = this.readCurrentSourceError();
+    if (sourceError) {
+      this.setStatus(sourceError, "error");
+      return;
+    }
+
+    this.statusMessage = undefined;
+    this.view = {
+      kind: "entryInput",
+      value: buildAddEntryPrefill(this.state),
+    };
+    this.invalidateAndRender();
+  }
+
+  private openRecentHosts(): void {
+    this.statusMessage = undefined;
+    this.view = { kind: "recentHosts" };
+    this.invalidateAndRender();
+  }
+
+  private readCurrentSourceError(): string | null {
+    const source = selectProtectMeConfigEditSource(this.state.config, this.writeTarget);
+
+    return buildProtectMeConfigEditSourceError(source);
+  }
+
+  private moveDialogOption(view: EntryConfirmView | ModeConfirmView, delta: number): void {
+    view.selectedOptionIndex = clamp(view.selectedOptionIndex + delta, 0, 1);
+    this.invalidateAndRender();
+  }
+
+  private resolveModeConfirmation(view: ModeConfirmView): void {
+    if (view.selectedOptionIndex !== 0) {
+      this.cancelToMain("Mode change cancelled.");
+      return;
+    }
+
+    this.saveModeChange(view.nextMode);
+  }
+
+  private reviewEntryInput(view: EntryInputView): void {
+    const source = selectProtectMeConfigEditSource(this.state.config, this.writeTarget);
+    const appendPlan = planProtectMeConfigAllowListAppend(source, view.value);
+    if (!appendPlan.ok) {
+      this.setStatus(appendPlan.reason, "error");
+      return;
+    }
+
+    this.statusMessage = undefined;
+    this.view = {
+      kind: "entryConfirm",
+      entry: appendPlan.entry,
+      selectedOptionIndex: 0,
+    };
+    this.invalidateAndRender();
+  }
+
+  private resolveEntryConfirmation(view: EntryConfirmView): void {
+    if (view.selectedOptionIndex !== 0) {
+      this.cancelToMain("Allow-list edit cancelled.");
+      return;
+    }
+
+    this.saveAllowListEntry(view.entry);
+  }
+
+  private saveModeChange(nextMode: ProtectMeMode): void {
+    if (!this.startSave()) return;
+
+    void this.performModeSave(nextMode);
+  }
+
+  private saveAllowListEntry(entry: string): void {
+    if (!this.startSave()) return;
+
+    void this.performEntrySave(entry);
+  }
+
+  private startSave(): boolean {
+    if (this.actionInFlight) return false;
     if (!this.actionDependencies) {
       this.setStatus("Editing is unavailable in this panel instance.", "error");
-      return;
+      return false;
     }
 
     this.actionInFlight = true;
     this.setStatus("Saving ProtectMe config…", "info");
-    void this.performAction(action);
+
+    return true;
   }
 
-  private async performAction(action: ProtectMePanelAction): Promise<void> {
+  private async performModeSave(nextMode: ProtectMeMode): Promise<void> {
     try {
-      const result = await executeProtectMePanelAction(action, this.writeTarget, this.state, this.actionDependencies!);
-      if (result.nextWriteTarget) this.writeTarget = result.nextWriteTarget;
-      this.actionInFlight = false;
-      this.setStatus(result.message, result.status === "error" ? "error" : "info");
+      const result = await saveProtectMePanelMode(this.writeTarget, this.state, this.actionDependencies!, nextMode);
+      this.finishAction(result);
     } catch (error) {
-      this.actionInFlight = false;
-      this.setStatus(`ProtectMe config edit failed: ${buildErrorMessage(error)}`, "error");
+      this.failAction(error);
     }
   }
 
-  private setWriteTarget(writeTarget: ProtectMePanelWriteTarget): void {
-    this.writeTarget = writeTarget;
-    this.setStatus(`Writing ${writeTarget} config.`, "info");
+  private async performEntrySave(entry: string): Promise<void> {
+    try {
+      const result = await saveProtectMePanelAllowListEntry(this.writeTarget, this.state, this.actionDependencies!, entry);
+      this.finishAction(result);
+    } catch (error) {
+      this.failAction(error);
+    }
+  }
+
+  private finishAction(result: ProtectMePanelActionResult): void {
+    this.actionInFlight = false;
+    this.returnToMain(result.message, result.status === "error" ? "error" : "info");
+  }
+
+  private failAction(error: unknown): void {
+    this.actionInFlight = false;
+    this.returnToMain(`ProtectMe config edit failed: ${buildErrorMessage(error)}`, "error");
+  }
+
+  private appendEntryInput(data: string, view: EntryInputView): void {
+    const text = extractPrintableInput(data);
+    if (!text) return;
+
+    this.updateEntryInput(`${view.value}${text}`);
+  }
+
+  private updateEntryInput(value: string): void {
+    this.statusMessage = undefined;
+    this.view = { kind: "entryInput", value };
+    this.invalidateAndRender();
+  }
+
+  private cancelToMain(message: string): void {
+    this.returnToMain(message, "info");
+  }
+
+  private returnToMain(text?: string, type: ProtectMePanelStatusMessage["type"] = "info"): void {
+    this.view = { kind: "main" };
+    this.selectedSettingIndex = 0;
+    this.statusMessage = text ? { text, type } : undefined;
+    this.invalidateAndRender();
   }
 
   private setStatus(text: string, type: ProtectMePanelStatusMessage["type"]): void {
     this.statusMessage = { text, type };
+    this.invalidateAndRender();
+  }
+
+  private invalidateAndRender(): void {
     this.invalidate();
     this.requestRender();
   }
+}
+
+function buildDialog(view: ProtectMePanelView, state: ProtectMePanelState): ProtectMePanelDialog {
+  if (view.kind === "modeConfirm") return buildModeConfirmDialog(view, state);
+  if (view.kind === "entryInput") return buildEntryInputDialog(view);
+  if (view.kind === "entryConfirm") return buildEntryConfirmDialog(view);
+  if (view.kind === "recentHosts") return buildRecentHostsDialog(state);
+
+  return buildEntryInputDialog({ kind: "entryInput", value: "" });
+}
+
+function buildModeConfirmDialog(view: ModeConfirmView, state: ProtectMePanelState): ProtectMePanelDialog {
+  return {
+    title: "Confirm mode change",
+    lines: [
+      `Switch project mode from ${state.config.effective.mode} to ${view.nextMode}?`,
+      "Changes are saved only after confirmation.",
+    ],
+    footer: "↑↓ choose • Enter confirm • Esc cancel",
+    options: [
+      { label: `Apply ${view.nextMode}`, value: APPLY_MODE_VALUE },
+      { label: "Cancel", value: CANCEL_VALUE },
+    ],
+    selectedOptionIndex: view.selectedOptionIndex,
+  };
+}
+
+function buildEntryInputDialog(view: EntryInputView): ProtectMePanelDialog {
+  return {
+    title: "Edit allow-list entry",
+    lines: ["Add a host to the project allow-list.", "Entry is normalized before saving."],
+    footer: "Type host • Enter review • Esc cancel",
+    input: view.value,
+    inputLabel: "Host",
+  };
+}
+
+function buildEntryConfirmDialog(view: EntryConfirmView): ProtectMePanelDialog {
+  return {
+    title: "Confirm allow-list entry",
+    lines: [`Save ${view.entry} to the project allow-list?`, "No file is changed until you confirm."],
+    footer: "↑↓ choose • Enter confirm • Esc cancel",
+    options: [
+      { label: `Save ${view.entry}`, value: SAVE_ENTRY_VALUE },
+      { label: "Cancel", value: CANCEL_VALUE },
+    ],
+    selectedOptionIndex: view.selectedOptionIndex,
+  };
+}
+
+function buildRecentHostsDialog(state: ProtectMePanelState): ProtectMePanelDialog {
+  return {
+    title: "Recent blocked hosts",
+    lines: buildRecentHostLines(state.recentBlockedHosts),
+    footer: "Enter/Esc back • q quit",
+  };
+}
+
+function buildRecentHostLines(hosts: string[]): string[] {
+  if (hosts.length === 0) return ["No blocked attempts logged."];
+
+  return hosts.map(formatRecentHostLine);
+}
+
+function formatRecentHostLine(host: string, index: number): string {
+  return `${index + 1}. ${host}`;
+}
+
+function buildAddEntryPrefill(state: ProtectMePanelState): string {
+  const recentBlockedHost = state.recentBlockedHosts[0];
+  if (!recentBlockedHost) return "";
+
+  const suggestion = suggestCleanAllowListEntry(recentBlockedHost);
+
+  return suggestion.suggestedEntry ?? normalizeConfigAllowListEntry(recentBlockedHost) ?? recentBlockedHost;
+}
+
+function getNextProtectMeMode(mode: ProtectMeMode): ProtectMeMode {
+  return mode === "block" ? "allow" : "block";
+}
+
+function extractPrintableInput(data: string): string {
+  let text = "";
+
+  for (const character of data) {
+    if (isPrintableCharacter(character)) text += character;
+  }
+
+  return text;
+}
+
+function isPrintableCharacter(character: string): boolean {
+  const codePoint = character.codePointAt(0) ?? 0;
+
+  return codePoint >= 32 && codePoint !== 127;
+}
+
+function isCancelInput(data: string): boolean {
+  return matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"));
+}
+
+function isQuitInput(data: string): boolean {
+  return data === "q" || data === "Q";
 }
 
 function buildErrorMessage(error: unknown): string {

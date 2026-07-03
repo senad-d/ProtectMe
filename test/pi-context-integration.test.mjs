@@ -43,9 +43,9 @@ test("Pi-context lifecycle integration resets status and attempts on reload-like
     [1, 2, 1],
   );
   assert.deepEqual(ctx.ui.statusCalls, [
-    { key: "protectme", text: "ProtectMe: block · 0 sites" },
+    { key: "protectme", text: "🌐 (0 sites)" },
     { key: "protectme", text: undefined },
-    { key: "protectme", text: "ProtectMe: block · 0 sites" },
+    { key: "protectme", text: "🌐 (0 sites)" },
   ]);
   assert.equal(harness.pi.userMessages.length, 0);
   assert.equal(harness.pi.messages.length, 2);
@@ -66,7 +66,7 @@ test("Pi-context trust integration passes untrusted state through event and comm
     { cwd, homeDir, agentDir, projectTrusted: false },
     { cwd, homeDir, agentDir, projectTrusted: false },
   ]);
-  assert.equal(ctx.ui.statusCalls[0].text, "ProtectMe: block · 0 sites · project config ignored");
+  assert.equal(ctx.ui.statusCalls[0].text, "🌐 (0 sites) · project config ignored");
   assert.match(ctx.ui.notifications[0].message, /project config ignored/u);
   assert.equal(ctx.ui.customCalls.length, 1);
   assert.equal(ctx.ui.renderedLines.some((line) => line.includes("project config ignored")), true);
@@ -273,7 +273,7 @@ class FakeExtensionUi {
     this.customCalls.push(factory);
     const component = factory({ requestRender: this.requestRender.bind(this) }, plainTheme, { source: "fake-keybindings" }, this.recordDone.bind(this));
     this.customComponents.push(component);
-    this.renderedLines = component.render(96);
+    this.renderedLines = component.render(140);
     component.handleInput?.("q");
     return this.doneValues.at(-1);
   }

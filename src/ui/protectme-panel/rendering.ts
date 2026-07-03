@@ -1,14 +1,10 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-import {
-  normalizeConfigAllowList,
-  readProtectMeConfigSourceAllowListEntries,
-  selectProtectMeConfigEditSource,
-  type ProtectMeConfigLoadResult,
-} from "../../config/index.ts";
+import { normalizeConfigAllowList, type ProtectMeConfigLoadResult } from "../../config/index.ts";
 import { EXTENSION_DISPLAY_NAME } from "../../constants.ts";
 import type {
-  ProtectMePanelCategory,
+  ProtectMePanelDialog,
+  ProtectMePanelDialogOption,
   ProtectMePanelSetting,
   ProtectMePanelState,
   ProtectMePanelStatusMessage,
@@ -17,10 +13,12 @@ import type {
   SettingValueKind,
 } from "./types.ts";
 
-const WIDE_MODE_MIN_WIDTH = 72;
 const TINY_MODE_MAX_WIDTH = 23;
-const MAX_VISIBLE_SETTINGS = 10;
 const PANEL_TITLE = EXTENSION_DISPLAY_NAME;
+const PANEL_SCOPE = "Config";
+const BODY_MIN_HEIGHT = 8;
+const ROW_INDENT = "  ";
+const CURSOR = "▌";
 
 export function renderProtectMePanel(
   width: number,
@@ -32,6 +30,19 @@ export function renderProtectMePanel(
 ): string[] {
   const safeWidth = Math.max(1, width);
   const lines = renderProtectMePanelFresh(safeWidth, state, selectedSettingIndex, writeTarget, statusMessage, theme);
+
+  return lines.map((line) => fitLine(line, safeWidth));
+}
+
+export function renderProtectMePanelDialog(
+  width: number,
+  state: ProtectMePanelState,
+  dialog: ProtectMePanelDialog,
+  statusMessage: ProtectMePanelStatusMessage | undefined,
+  theme: ProtectMePanelTheme,
+): string[] {
+  const safeWidth = Math.max(1, width);
+  const lines = renderProtectMePanelDialogFresh(safeWidth, state, dialog, statusMessage, theme);
 
   return lines.map((line) => fitLine(line, safeWidth));
 }
@@ -51,38 +62,26 @@ export function buildProtectMePanelSettings(
       action: "toggleMode",
     },
     {
-      label: "Write target",
-      value: writeTarget,
-      description: "Choose whether edits save to project or global config.",
-      kind: "target",
-      action: "chooseWriteTarget",
-    },
-    {
-      label: "Add allow-list entry",
-      value: `to ${writeTarget}`,
-      description: `Add a cleaned editable host entry to ${writeTarget} config.`,
+      label: "Edit allow-list entry",
+      value: "",
+      description: `Enter opens an editable ${writeTarget} allow-list entry flow.`,
       kind: "action",
       action: "addEntry",
     },
     {
-      label: "Remove allow-list entry",
-      value: `${writeTarget} (${countTargetSites(config, writeTarget)})`,
-      description: `Remove a host entry from ${writeTarget} config.`,
+      label: "Recent blocked hosts",
+      value: "",
+      description: "Enter opens the blocked-host log list.",
       kind: "action",
-      action: "removeEntry",
+      action: "showRecentBlockedHosts",
     },
-    {
-      label: "Global config path",
-      value: config.paths.globalConfigPath,
-      description: "Global ProtectMe config path.",
-      kind: "path",
-    },
-    {
-      label: "Project config path",
-      value: config.paths.projectConfigPath,
-      description: "Project ProtectMe config path.",
-      kind: "path",
-    },
+  ];
+}
+
+export function buildProtectMePanelInfoSettings(state: ProtectMePanelState): ProtectMePanelSetting[] {
+  const config = state.config;
+
+  return [
     {
       label: "Global site count",
       value: String(countConfigSites(config.globalConfig.config?.allowList)),
@@ -94,18 +93,6 @@ export function buildProtectMePanelSettings(
       value: String(countConfigSites(config.projectConfig.config?.allowList)),
       description: "Normalized allow-list entry count from project config.",
       kind: "count",
-    },
-    {
-      label: "Effective site count",
-      value: String(config.effective.allowList.length),
-      description: "Normalized effective allow-list entry count.",
-      kind: "count",
-    },
-    {
-      label: "Recent blocked hosts",
-      value: formatRecentBlockedHosts(state.recentBlockedHosts),
-      description: "Most recent blocked hosts recorded in the ProtectMe log.",
-      kind: "text",
     },
   ];
 }
@@ -133,44 +120,23 @@ function renderProtectMePanelFresh(
   theme: ProtectMePanelTheme,
 ): string[] {
   if (width <= TINY_MODE_MAX_WIDTH) return renderTinyPanel(width, state, theme);
-  if (width >= WIDE_MODE_MIN_WIDTH) {
-    return renderWidePanel(width, state, selectedSettingIndex, writeTarget, statusMessage, theme);
-  }
 
-  return renderNarrowPanel(width, state, selectedSettingIndex, writeTarget, statusMessage, theme);
+  return renderMainPanel(width, state, selectedSettingIndex, writeTarget, statusMessage, theme);
 }
 
-function renderWidePanel(
+function renderProtectMePanelDialogFresh(
   width: number,
   state: ProtectMePanelState,
-  selectedSettingIndex: number,
-  writeTarget: ProtectMePanelWriteTarget,
+  dialog: ProtectMePanelDialog,
   statusMessage: ProtectMePanelStatusMessage | undefined,
   theme: ProtectMePanelTheme,
 ): string[] {
-  const leftPaneWidth = Math.min(22, Math.max(16, Math.floor(width * 0.27)));
-  const rightPaneWidth = Math.max(10, width - leftPaneWidth - 3);
-  const categories = buildProtectMePanelCategories(state, writeTarget);
-  const rightRows = renderSettingsRows(rightPaneWidth, state, selectedSettingIndex, writeTarget, theme);
-  const bodyHeight = Math.max(categories.length, rightRows.length, 8);
-  const lines = [renderTopBorder(width, PANEL_TITLE, buildScopeLabel(state), theme)];
+  if (width <= TINY_MODE_MAX_WIDTH) return renderTinyDialog(width, dialog, theme);
 
-  lines.push(renderFrameLine(width, buildSourceLine(state, writeTarget), theme));
-  lines.push(renderFrameLine(width, "↑↓ move  Enter action  p/g target  q quit", theme));
-  lines.push(renderWideSeparator(leftPaneWidth, rightPaneWidth, "┬", theme));
-
-  for (let index = 0; index < bodyHeight; index += 1) {
-    lines.push(renderWideBodyLine(leftPaneWidth, rightPaneWidth, renderCategoryCell(categories, index, theme), rightRows[index] ?? "", theme));
-  }
-
-  lines.push(renderWideSeparator(leftPaneWidth, rightPaneWidth, "┴", theme));
-  lines.push(renderFrameLine(width, buildFooterText(state, selectedSettingIndex, writeTarget, statusMessage), theme));
-  lines.push(renderBottomBorder(width, theme));
-
-  return lines;
+  return renderDialogPanel(width, state, dialog, statusMessage, theme);
 }
 
-function renderNarrowPanel(
+function renderMainPanel(
   width: number,
   state: ProtectMePanelState,
   selectedSettingIndex: number,
@@ -179,21 +145,80 @@ function renderNarrowPanel(
   theme: ProtectMePanelTheme,
 ): string[] {
   const innerWidth = width - 2;
-  const rows = renderSettingsRows(innerWidth, state, selectedSettingIndex, writeTarget, theme);
-  const bodyHeight = Math.max(rows.length, 8);
-  const lines = [renderTopBorder(width, PANEL_TITLE, buildScopeLabel(state), theme)];
-
-  lines.push(renderFrameLine(width, buildSourceLine(state, writeTarget), theme));
-  lines.push(renderFrameLine(width, "↑↓ move  Enter action  p/g target  q quit", theme));
-  lines.push(renderNarrowSeparator(width, theme));
+  const rows = renderMainRows(innerWidth, state, selectedSettingIndex, writeTarget, theme);
+  const bodyHeight = Math.max(rows.length, BODY_MIN_HEIGHT);
+  const lines = renderPanelHeader(width, state, theme);
 
   for (let index = 0; index < bodyHeight; index += 1) lines.push(renderFrameLine(width, rows[index] ?? "", theme));
 
-  lines.push(renderNarrowSeparator(width, theme));
-  lines.push(renderFrameLine(width, buildFooterText(state, selectedSettingIndex, writeTarget, statusMessage), theme));
+  lines.push(renderSeparator(width, theme));
+  lines.push(renderFrameLine(width, buildFooterText(state, selectedSettingIndex, writeTarget, statusMessage, theme), theme));
   lines.push(renderBottomBorder(width, theme));
 
   return lines;
+}
+
+function renderDialogPanel(
+  width: number,
+  state: ProtectMePanelState,
+  dialog: ProtectMePanelDialog,
+  statusMessage: ProtectMePanelStatusMessage | undefined,
+  theme: ProtectMePanelTheme,
+): string[] {
+  const innerWidth = width - 2;
+  const rows = renderDialogRows(innerWidth, dialog, theme);
+  const bodyHeight = Math.max(rows.length, BODY_MIN_HEIGHT);
+  const lines = renderPanelHeader(width, state, theme);
+
+  for (let index = 0; index < bodyHeight; index += 1) lines.push(renderFrameLine(width, rows[index] ?? "", theme));
+
+  lines.push(renderSeparator(width, theme));
+  lines.push(renderFrameLine(width, buildDialogFooter(dialog, statusMessage, theme), theme));
+  lines.push(renderBottomBorder(width, theme));
+
+  return lines;
+}
+
+function renderPanelHeader(width: number, state: ProtectMePanelState, theme: ProtectMePanelTheme): string[] {
+  return [
+    renderTopBorder(width, PANEL_TITLE, PANEL_SCOPE, theme),
+    renderFrameLine(width, buildSourceLine(state), theme),
+    renderFrameLine(width, `${ROW_INDENT}↑↓ move • Enter action • q quit`, theme),
+    renderSeparator(width, theme),
+  ];
+}
+
+function renderMainRows(
+  innerWidth: number,
+  state: ProtectMePanelState,
+  selectedSettingIndex: number,
+  writeTarget: ProtectMePanelWriteTarget,
+  theme: ProtectMePanelTheme,
+): string[] {
+  const settings = buildProtectMePanelSettings(state, writeTarget);
+  const infoSettings = buildProtectMePanelInfoSettings(state);
+  const safeSelectedIndex = clamp(selectedSettingIndex, 0, Math.max(0, settings.length - 1));
+  const rows = [renderSectionHeader(innerWidth, "Configuration", theme)];
+
+  for (let index = 0; index < settings.length; index += 1) {
+    rows.push(renderSettingRow(innerWidth, settings[index]!, index === safeSelectedIndex, theme));
+  }
+
+  rows.push("");
+  rows.push(renderSectionHeader(innerWidth, "Info", theme));
+  for (const setting of infoSettings) rows.push(renderSettingRow(innerWidth, setting, false, theme));
+
+  return rows;
+}
+
+function renderDialogRows(innerWidth: number, dialog: ProtectMePanelDialog, theme: ProtectMePanelTheme): string[] {
+  const rows = [renderSectionHeader(innerWidth, dialog.title, theme)];
+
+  for (const line of dialog.lines) rows.push(renderDialogTextRow(innerWidth, line, theme));
+  if (dialog.input !== undefined) rows.push(renderInputRow(innerWidth, dialog.inputLabel ?? "Entry", dialog.input, theme));
+  if (dialog.options) rows.push(...renderDialogOptionRows(innerWidth, dialog.options, dialog.selectedOptionIndex ?? 0, theme));
+
+  return rows;
 }
 
 function renderTinyPanel(width: number, state: ProtectMePanelState, theme: ProtectMePanelTheme): string[] {
@@ -207,18 +232,15 @@ function renderTinyPanel(width: number, state: ProtectMePanelState, theme: Prote
   ];
 }
 
-function buildProtectMePanelCategories(state: ProtectMePanelState, writeTarget: ProtectMePanelWriteTarget): ProtectMePanelCategory[] {
-  return [
-    {
-      label: "Configuration",
-      description: "Current ProtectMe configuration state.",
-      settings: buildProtectMePanelSettings(state, writeTarget),
-    },
-  ];
-}
+function renderTinyDialog(width: number, dialog: ProtectMePanelDialog, theme: ProtectMePanelTheme): string[] {
+  const input = dialog.input === undefined ? "" : `: ${dialog.input}`;
 
-function countTargetSites(config: ProtectMeConfigLoadResult, writeTarget: ProtectMePanelWriteTarget): number {
-  return readProtectMeConfigSourceAllowListEntries(selectProtectMeConfigEditSource(config, writeTarget)).length;
+  return [
+    fitLine(theme.fg("accent", dialog.title), width),
+    fitLine(`${dialog.lines[0] ?? ""}${input}`, width),
+    fitLine(dialog.options?.[dialog.selectedOptionIndex ?? 0]?.label ?? "Enter", width),
+    fitLine("esc cancel", width),
+  ];
 }
 
 function countConfigSites(allowList: string[] | undefined): number {
@@ -227,56 +249,65 @@ function countConfigSites(allowList: string[] | undefined): number {
   return normalizeConfigAllowList(allowList).length;
 }
 
-function formatRecentBlockedHosts(hosts: string[]): string {
-  if (hosts.length === 0) return "none";
-
-  return hosts.join(", ");
+function renderSectionHeader(innerWidth: number, title: string, theme: ProtectMePanelTheme): string {
+  return fitLine(`${ROW_INDENT}${theme.fg("accent", theme.bold(title.toUpperCase()))}`, innerWidth);
 }
 
-function renderSettingsRows(
-  paneWidth: number,
-  state: ProtectMePanelState,
-  selectedSettingIndex: number,
-  writeTarget: ProtectMePanelWriteTarget,
+function renderSettingRow(
+  innerWidth: number,
+  setting: ProtectMePanelSetting,
+  selected: boolean,
   theme: ProtectMePanelTheme,
-): string[] {
-  const settings = buildProtectMePanelSettings(state, writeTarget);
-  const safeSelectedIndex = clamp(selectedSettingIndex, 0, Math.max(0, settings.length - 1));
-  const windowStart = calculateWindowStart(settings.length, safeSelectedIndex);
-  const visibleSettings = settings.slice(windowStart, windowStart + MAX_VISIBLE_SETTINGS);
-  const counter = buildCounter(safeSelectedIndex, settings.length);
-  const rows = [renderSettingsHeader(paneWidth, "Configuration", counter, theme)];
-
-  for (let index = 0; index < visibleSettings.length; index += 1) {
-    const settingIndex = windowStart + index;
-    rows.push(renderSettingRow(paneWidth, visibleSettings[index]!, settingIndex === safeSelectedIndex, theme));
-  }
-
-  return rows;
-}
-
-function renderSettingsHeader(paneWidth: number, title: string, counter: string, theme: ProtectMePanelTheme): string {
-  const safeWidth = Math.max(0, paneWidth);
-  const styledCounter = theme.fg("dim", counter);
-  const counterWidth = visibleWidth(counter);
-  const titleWidth = Math.max(0, safeWidth - counterWidth - 1);
-  const styledTitle = theme.fg("accent", theme.bold(fitLine(title.toUpperCase(), titleWidth)));
-  const gap = Math.max(1, safeWidth - visibleWidth(styledTitle) - visibleWidth(styledCounter));
-
-  return fitLine(`${styledTitle}${" ".repeat(gap)}${styledCounter}`, safeWidth);
-}
-
-function renderSettingRow(paneWidth: number, setting: ProtectMePanelSetting, selected: boolean, theme: ProtectMePanelTheme): string {
-  const safeWidth = Math.max(0, paneWidth);
-  const valueWidth = Math.max(0, Math.min(28, Math.floor(safeWidth * 0.4)));
-  const labelWidth = Math.max(1, safeWidth - 2 - 1 - valueWidth);
+): string {
+  const cellWidth = Math.max(0, innerWidth - visibleWidth(ROW_INDENT));
+  const valueWidth = setting.value ? Math.max(0, Math.min(28, Math.floor(cellWidth * 0.4))) : 0;
+  const labelWidth = Math.max(1, cellWidth - 2 - (valueWidth > 0 ? 1 : 0) - valueWidth);
   const prefix = selected ? theme.fg("accent", "▶ ") : "  ";
   const label = styleSettingLabel(fitLine(setting.label, labelWidth), selected, theme);
   const value = styleSettingValue(fitValue(setting.value, valueWidth, setting.kind), setting, theme);
   const labelPadding = " ".repeat(Math.max(0, labelWidth - visibleWidth(label)));
   const valuePadding = " ".repeat(Math.max(0, valueWidth - visibleWidth(value)));
+  const separator = valueWidth > 0 ? " " : "";
 
-  return fitLine(`${prefix}${label}${labelPadding} ${valuePadding}${value}`, safeWidth);
+  return fitLine(`${ROW_INDENT}${prefix}${label}${labelPadding}${separator}${valuePadding}${value}`, innerWidth);
+}
+
+function renderDialogTextRow(innerWidth: number, line: string, theme: ProtectMePanelTheme): string {
+  return fitLine(`${ROW_INDENT}${theme.fg("muted", sanitizeCellText(line))}`, innerWidth);
+}
+
+function renderInputRow(innerWidth: number, label: string, value: string, theme: ProtectMePanelTheme): string {
+  const cellWidth = Math.max(0, innerWidth - visibleWidth(ROW_INDENT));
+  const safeLabel = sanitizeCellText(label);
+  const labelPrefix = `${safeLabel}: `;
+  const inputWidth = Math.max(1, cellWidth - visibleWidth(labelPrefix));
+  const styledInput = `${fitLine(sanitizeCellText(value), Math.max(1, inputWidth - 1), "")}${theme.fg("accent", CURSOR)}`;
+
+  return fitLine(`${ROW_INDENT}${labelPrefix}${styledInput}`, innerWidth);
+}
+
+function renderDialogOptionRows(
+  innerWidth: number,
+  options: ProtectMePanelDialogOption[],
+  selectedOptionIndex: number,
+  theme: ProtectMePanelTheme,
+): string[] {
+  const safeSelectedIndex = clamp(selectedOptionIndex, 0, Math.max(0, options.length - 1));
+
+  return options.map((option, index) => renderDialogOptionRow(innerWidth, option, index === safeSelectedIndex, theme));
+}
+
+function renderDialogOptionRow(
+  innerWidth: number,
+  option: ProtectMePanelDialogOption,
+  selected: boolean,
+  theme: ProtectMePanelTheme,
+): string {
+  const cellWidth = Math.max(0, innerWidth - visibleWidth(ROW_INDENT));
+  const prefix = selected ? theme.fg("accent", "▶ ") : "  ";
+  const label = selected ? theme.fg("accent", theme.bold(option.label)) : option.label;
+
+  return fitLine(`${ROW_INDENT}${prefix}${fitLine(label, Math.max(1, cellWidth - 2))}`, innerWidth);
 }
 
 function styleSettingLabel(label: string, selected: boolean, theme: ProtectMePanelTheme): string {
@@ -295,51 +326,68 @@ function styleSettingValue(value: string, setting: ProtectMePanelSetting, theme:
   return value;
 }
 
-function renderCategoryCell(categories: ProtectMePanelCategory[], index: number, theme: ProtectMePanelTheme): string {
-  const category = categories[index];
-  if (!category) return "";
-
-  return `${theme.fg("accent", "▶ ")}${theme.fg("accent", theme.bold(category.label))}`;
-}
-
 function buildFooterText(
   state: ProtectMePanelState,
   selectedSettingIndex: number,
   writeTarget: ProtectMePanelWriteTarget,
   statusMessage: ProtectMePanelStatusMessage | undefined,
+  theme: ProtectMePanelTheme,
 ): string {
   const settings = buildProtectMePanelSettings(state, writeTarget);
   const selectedSetting = settings[clamp(selectedSettingIndex, 0, Math.max(0, settings.length - 1))];
-  const footer = selectedSetting
-    ? `${buildCounter(selectedSettingIndex, settings.length)} • ${selectedSetting.description}`
-    : "0/0 • Current ProtectMe configuration state.";
+  const footer = selectedSetting?.description ?? "Current ProtectMe configuration state.";
 
-  if (!statusMessage) return footer;
-
-  return `${statusMessage.text} • ${footer}`;
+  return formatFooterWithStatus(footer, statusMessage, theme);
 }
 
-function buildCounter(selectedIndex: number, count: number): string {
-  if (count === 0) return "0/0";
-
-  return `${clamp(selectedIndex, 0, count - 1) + 1}/${count}`;
+function buildDialogFooter(
+  dialog: ProtectMePanelDialog,
+  statusMessage: ProtectMePanelStatusMessage | undefined,
+  theme: ProtectMePanelTheme,
+): string {
+  return formatFooterWithStatus(dialog.footer, statusMessage, theme);
 }
 
-function calculateWindowStart(count: number, selectedIndex: number): number {
-  if (count <= MAX_VISIBLE_SETTINGS) return 0;
+function formatFooterWithStatus(
+  footer: string,
+  statusMessage: ProtectMePanelStatusMessage | undefined,
+  theme: ProtectMePanelTheme,
+): string {
+  if (!statusMessage) return `${ROW_INDENT}${footer}`;
 
-  const centeredStart = selectedIndex - Math.floor(MAX_VISIBLE_SETTINGS / 2);
-  return clamp(centeredStart, 0, count - MAX_VISIBLE_SETTINGS);
+  return `${ROW_INDENT}${styleStatusMessage(statusMessage, theme)} • ${footer}`;
 }
 
-function buildSourceLine(state: ProtectMePanelState, writeTarget: ProtectMePanelWriteTarget): string {
+function styleStatusMessage(statusMessage: ProtectMePanelStatusMessage, theme: ProtectMePanelTheme): string {
+  if (statusMessage.type === "error") return theme.fg("warning", statusMessage.text);
+
+  return theme.fg("muted", statusMessage.text);
+}
+
+function buildSourceLine(state: ProtectMePanelState): string {
+  const configPath = formatGlobalConfigPath(state.config);
+  const projectPath = formatProjectTrustPath(state.config);
   const projectStatus = formatIgnoredProjectConfigStatus(state.config);
 
-  return `writes ${writeTarget} config • effective ${state.config.effective.mode}${projectStatus}`;
+  return `${ROW_INDENT}Config path ${configPath} • Pi project trust path ${projectPath}${projectStatus}`;
 }
 
-function buildScopeLabel(state: ProtectMePanelState): string {
-  return `${state.config.effective.mode} mode`;
+function formatGlobalConfigPath(config: ProtectMeConfigLoadResult): string {
+  const path = config.paths.globalConfigPath;
+  const homeDir = config.paths.homeDir;
+  if (homeDir && path.startsWith(`${homeDir}/`)) return `~/${path.slice(homeDir.length + 1)}`;
+  if (path.endsWith("/.pi/agent/protectme.json")) return "~/.pi/agent/protectme.json";
+
+  return path;
+}
+
+function formatProjectTrustPath(config: ProtectMeConfigLoadResult): string {
+  const path = config.paths.projectConfigPath;
+  const cwd = config.paths.cwd;
+  if (cwd && path.startsWith(`${cwd}/`)) return `.${path.slice(cwd.length)}`;
+  if (path.endsWith("/.pi/protectme.json")) return ".pi/protectme.json";
+
+  return path;
 }
 
 function formatIgnoredProjectConfigStatus(config: ProtectMeConfigLoadResult): string {
@@ -362,32 +410,12 @@ function renderBottomBorder(width: number, theme: ProtectMePanelTheme): string {
   return theme.fg("accent", `╰${"─".repeat(Math.max(0, width - 2))}╯`);
 }
 
-function renderNarrowSeparator(width: number, theme: ProtectMePanelTheme): string {
+function renderSeparator(width: number, theme: ProtectMePanelTheme): string {
   return theme.fg("accent", `├${"─".repeat(Math.max(0, width - 2))}┤`);
-}
-
-function renderWideSeparator(leftPaneWidth: number, rightPaneWidth: number, junction: "┬" | "┴", theme: ProtectMePanelTheme): string {
-  return theme.fg("accent", `├${"─".repeat(leftPaneWidth)}${junction}${"─".repeat(rightPaneWidth)}┤`);
 }
 
 function renderFrameLine(width: number, content: string, theme: ProtectMePanelTheme): string {
   return `${theme.fg("accent", "│")}${fitLine(content, Math.max(0, width - 2))}${theme.fg("accent", "│")}`;
-}
-
-function renderWideBodyLine(
-  leftPaneWidth: number,
-  rightPaneWidth: number,
-  leftContent: string,
-  rightContent: string,
-  theme: ProtectMePanelTheme,
-): string {
-  return [
-    theme.fg("accent", "│"),
-    fitLine(leftContent, leftPaneWidth),
-    theme.fg("accent", "│"),
-    fitLine(rightContent, rightPaneWidth),
-    theme.fg("accent", "│"),
-  ].join("");
 }
 
 function fitValue(value: string, width: number, kind: SettingValueKind): string {

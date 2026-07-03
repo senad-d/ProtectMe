@@ -113,7 +113,7 @@ When effective mode is `"block"`:
    - keep blocked.
 3. If UI confirmation is unavailable, repeated attempts fail closed.
 
-When ProtectMe writes config from a prompt, it shows a clean editable suggested host entry before saving. Prompt and `/protectme` edits serialize read-modify-write updates per config file so concurrent changes preserve existing mode and allow-list data.
+When ProtectMe writes config from a repeated-attempt prompt, it shows a clean editable suggested host entry and asks for final confirmation before saving. Prompt and `/protectme` edits serialize read-modify-write updates per config file so concurrent changes preserve existing mode and allow-list data.
 
 ## `/protectme` TUI panel
 
@@ -125,22 +125,19 @@ Run:
 
 The command opens only in Pi TUI mode and warns otherwise.
 
-The panel displays:
+The panel uses one framed box with:
 
-- global config path,
-- project config path,
-- effective mode,
-- global/project/effective site counts,
-- recent blocked hosts.
+- a `CONFIGURATION` section for editable project settings,
+- an `INFO` section with global and project allow-list counts,
+- a compact header showing the global config path and project trust config path.
 
-It also provides TUI actions to:
+Configuration actions stay inside the same box:
 
-- choose project or global write target,
-- toggle mode between `block` and `allow`,
-- add a cleaned/editable allow-list entry,
-- remove entries from project or global config.
+- `Effective mode` opens an in-panel confirmation before saving project mode as `block` or `allow`,
+- `Edit allow-list entry` opens an in-panel entry editor and confirmation before adding a project allow-list host,
+- `Recent blocked hosts` opens an in-panel read-only list from the blocked-attempt log.
 
-Counts and effective config refresh after writes. Write failures are shown as errors without corrupting existing config files, and concurrent panel/prompt edits to the same config file are serialized.
+Confirmed changes are saved immediately, refresh the displayed counts/effective config, and return to the top of the configuration section. Cancelled steps do not write config files. Write failures are shown as errors without corrupting existing config files, and concurrent panel/prompt edits to the same config file are serialized.
 
 ## Blocked-attempt log
 
@@ -156,7 +153,7 @@ The log is project-local and append-only. ProtectMe does not compact, upload, or
 
 ## Troubleshooting
 
-- Unexpected block: run `/protectme`, inspect the effective mode and counts, then add the intended host to project or global config.
+- Unexpected block: run `/protectme`, inspect the effective mode and counts, then add the intended host to project config or edit the global config manually.
 - Config warning: fix invalid JSON/schema, unreadable files, or ignored invalid allow-list entries; while any loaded source is invalid or unreadable, ProtectMe uses `block` mode with an empty effective allow-list.
 - Prompt unavailable: use Pi TUI mode for confirmation prompts, or edit config manually.
 - Direct shell command was not blocked: run commands through Pi `!`/`!!` for ProtectMe coverage, and use OS/container network controls for commands outside Pi or unsupported CLIs.

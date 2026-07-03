@@ -14,7 +14,7 @@ export interface ProtectMeSessionStatusUI {
 export function buildProtectMeStatusText(config: ProtectMeConfigLoadResult): string {
   const projectConfigStatus = formatIgnoredProjectConfigStatus(config);
 
-  return `${EXTENSION_DISPLAY_NAME}: ${config.effective.mode} · ${formatSiteCount(config.effective.allowList.length)}${projectConfigStatus}`;
+  return `🌐 (${formatSiteCount(config.effective.allowList.length)})${projectConfigStatus}`;
 }
 
 export function buildProtectMeConfigWarningMessage(warnings: string[]): string | null {

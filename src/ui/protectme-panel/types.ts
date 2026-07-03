@@ -65,14 +65,23 @@ export interface ProtectMePanelStatusMessage {
   type: "error" | "info";
 }
 
-export interface ProtectMePanelCategory {
+export interface ProtectMePanelDialogOption {
   label: string;
-  description: string;
-  settings: ProtectMePanelSetting[];
+  value: string;
+}
+
+export interface ProtectMePanelDialog {
+  title: string;
+  lines: string[];
+  footer: string;
+  input?: string;
+  inputLabel?: string;
+  options?: ProtectMePanelDialogOption[];
+  selectedOptionIndex?: number;
 }
 
 export type ProtectMePanelWriteTarget = ProtectMeConfigSource;
 export type ProtectMeThemeRole = "accent" | "dim" | "muted" | "success" | "warning";
-export type ProtectMePanelAction = "addEntry" | "chooseWriteTarget" | "removeEntry" | "toggleMode";
+export type ProtectMePanelAction = "addEntry" | "chooseWriteTarget" | "removeEntry" | "showRecentBlockedHosts" | "toggleMode";
 export type ProtectMePanelActionStatus = "cancelled" | "error" | "success";
 export type SettingValueKind = "action" | "count" | "mode" | "path" | "target" | "text";

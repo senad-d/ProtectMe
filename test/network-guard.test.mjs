@@ -9,6 +9,7 @@ import {
   handleNetworkGuardSessionStart,
   handleNetworkGuardToolCall,
   handleNetworkGuardUserBash,
+  PROTECTME_CONFIG_CONFIRM_CHOICES,
   PROTECTME_GUIDANCE_CUSTOM_MESSAGE_TYPE,
   PROTECTME_SECOND_ATTEMPT_CHOICES,
   registerNetworkGuardEvents,
@@ -35,7 +36,7 @@ test("session start resets attempts, loads config, sets status, and shows warnin
 
   assert.equal(state.blockedHostAttempts.size, 0);
   assert.equal(fake.loadCalls, 1);
-  assert.deepEqual(ctx.ui.statusCalls, [{ key: "protectme", text: "ProtectMe: block · 2 sites" }]);
+  assert.deepEqual(ctx.ui.statusCalls, [{ key: "protectme", text: "🌐 (2 sites)" }]);
   assert.deepEqual(ctx.ui.notifications, [
     {
       message: 'ProtectMe config warning: project allowList entry ignored ("bad host"): invalid host',
@@ -73,7 +74,7 @@ test("invalid config warns on session start and still fails closed on tool calls
     fake.dependencies,
   );
 
-  assert.equal(ctx.ui.statusCalls[0].text, "ProtectMe: block · 0 sites");
+  assert.equal(ctx.ui.statusCalls[0].text, "🌐 (0 sites)");
   assert.equal(ctx.ui.notifications.length, 1);
   assert.match(ctx.ui.notifications[0].message, /global config invalid/u);
   assert.deepEqual(result, {
@@ -365,7 +366,7 @@ test("mixed-source invalid config fails closed in network guard despite permissi
       fake.dependencies,
     );
 
-    assert.equal(ctx.ui.statusCalls[0].text, "ProtectMe: block · 0 sites");
+    assert.equal(ctx.ui.statusCalls[0].text, "🌐 (0 sites)");
     assert.match(ctx.ui.notifications[0].message, /Effective config failed closed/u);
     assert.deepEqual(result, {
       block: true,
@@ -394,7 +395,7 @@ test("untrusted project config is visible as ignored and does not disable blocki
     { cwd, homeDir, agentDir, projectTrusted: false },
     { cwd, homeDir, agentDir, projectTrusted: false },
   ]);
-  assert.equal(ctx.ui.statusCalls[0].text, "ProtectMe: block · 0 sites · project config ignored");
+  assert.equal(ctx.ui.statusCalls[0].text, "🌐 (0 sites) · project config ignored");
   assert.match(ctx.ui.notifications[0].message, /project config ignored/u);
   assert.deepEqual(result, {
     block: true,
@@ -508,7 +509,7 @@ test("second blocked attempt can add project config and allow the current call",
   const fake = createFakeDependencies(buildConfigResult());
   const ctx = createFakeContext({
     hasUI: true,
-    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addProject],
+    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addProject, PROTECTME_CONFIG_CONFIRM_CHOICES.saveAndAllow],
     editorValues: ["https://Example.com/login"],
   });
   const event = { toolName: "bash", input: { command: "curl https://api.example.com/v1" } };
@@ -517,6 +518,8 @@ test("second blocked attempt can add project config and allow the current call",
   const result = await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
 
   assert.equal(result, undefined);
+  assert.equal(ctx.ui.selectCalls.length, 2);
+  assert.deepEqual(ctx.ui.selectCalls[1].options, Object.values(PROTECTME_CONFIG_CONFIRM_CHOICES));
   assert.equal(ctx.ui.editorCalls.length, 1);
   assert.equal(ctx.ui.editorCalls[0].prefill, "example.com");
   assert.deepEqual(fake.projectWrites, [
@@ -534,7 +537,7 @@ test("second blocked attempt preserves existing project mode while appending an 
   const fake = createFakeDependencies(buildProjectBlockConfigResult());
   const ctx = createFakeContext({
     hasUI: true,
-    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addProject],
+    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addProject, PROTECTME_CONFIG_CONFIRM_CHOICES.saveAndAllow],
     editorValues: ["api.example.com"],
   });
   const event = { toolName: "bash", input: { command: "curl https://api.example.com/v1" } };
@@ -557,7 +560,7 @@ test("second blocked attempt can add global config and allow the current call", 
   const fake = createFakeDependencies(buildConfigResult());
   const ctx = createFakeContext({
     hasUI: true,
-    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addGlobal],
+    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addGlobal, PROTECTME_CONFIG_CONFIRM_CHOICES.saveAndAllow],
     editorValues: ["Global.example"],
   });
   const event = { toolName: "bash", input: { command: "wget https://downloads.example.com/file" } };
@@ -566,6 +569,8 @@ test("second blocked attempt can add global config and allow the current call", 
   const result = await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
 
   assert.equal(result, undefined);
+  assert.equal(ctx.ui.selectCalls.length, 2);
+  assert.deepEqual(ctx.ui.selectCalls[1].options, Object.values(PROTECTME_CONFIG_CONFIRM_CHOICES));
   assert.equal(ctx.ui.editorCalls.length, 1);
   assert.equal(ctx.ui.editorCalls[0].prefill, "example.com");
   assert.deepEqual(fake.globalWrites, [
@@ -576,6 +581,29 @@ test("second blocked attempt can add global config and allow the current call", 
   ]);
   assert.equal(fake.projectWrites.length, 0);
   assert.equal(fake.loggedAttempts.length, 1);
+});
+
+test("cancelled config-write confirmation fails closed without saving", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult());
+  const ctx = createFakeContext({
+    hasUI: true,
+    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addProject, PROTECTME_CONFIG_CONFIRM_CHOICES.cancel],
+    editorValues: ["example.com"],
+  });
+  const event = { toolName: "bash", input: { command: "curl https://example.com" } };
+
+  await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
+  const result = await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
+
+  assert.deepEqual(result, {
+    block: true,
+    reason: "ProtectMe kept blocking network request to example.com. The user did not approve this call.",
+  });
+  assert.equal(ctx.ui.selectCalls.length, 2);
+  assert.equal(fake.projectWrites.length, 0);
+  assert.equal(fake.globalWrites.length, 0);
+  assert.equal(fake.loggedAttempts.at(-1).outcome, "prompt_denied");
 });
 
 test("keep blocked returns a block result and logs the denied prompt outcome", async () => {

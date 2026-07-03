@@ -59,9 +59,15 @@ export const PROTECTME_SECOND_ATTEMPT_CHOICES = {
   keepBlocked: "Keep blocked",
 } as const;
 
+export const PROTECTME_CONFIG_CONFIRM_CHOICES = {
+  saveAndAllow: "Save entry and allow this call",
+  cancel: "Cancel without saving",
+} as const;
+
 export const PROTECTME_GUIDANCE_CUSTOM_MESSAGE_TYPE = "protectme-guidance";
 
 const PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES = Object.values(PROTECTME_SECOND_ATTEMPT_CHOICES);
+const PROTECTME_CONFIG_CONFIRM_CHOICE_VALUES = Object.values(PROTECTME_CONFIG_CONFIRM_CHOICES);
 const PROTECTME_USER_BASH_LOG_TOOL_NAME = "user_bash";
 const PROTECTME_PROMPT_ERROR_NOTIFICATION = [
   "ProtectMe blocked this repeated network request because the confirmation prompt failed.",
@@ -420,6 +426,10 @@ async function allowViaConfigWrite(
     return buildPromptDeniedDecision(request.candidate.host);
   }
 
+  const confirmed = await confirmConfigWrite(target, ui, request, writePlan.entry);
+  if (confirmed === "error") return buildPromptErrorDecision(request.candidate.host);
+  if (!confirmed) return buildPromptDeniedDecision(request.candidate.host);
+
   try {
     await mutateTargetConfig(target, config, writePlan.entry, dependencies);
   } catch (error) {
@@ -477,6 +487,31 @@ function buildSuggestedAllowListEntry(request: DisallowedRequest): string {
 
 function buildAllowListEntryEditorTitle(target: ConfigPromptTarget, host: string): string {
   return `ProtectMe ${target} allow-list entry for ${host}`;
+}
+
+async function confirmConfigWrite(
+  target: ConfigPromptTarget,
+  ui: NetworkGuardPromptUI,
+  request: DisallowedRequest,
+  entry: string,
+): Promise<boolean | "error"> {
+  try {
+    const choice = await ui.select(buildConfigWriteConfirmationPrompt(target, request, entry), PROTECTME_CONFIG_CONFIRM_CHOICE_VALUES);
+
+    return choice === PROTECTME_CONFIG_CONFIRM_CHOICES.saveAndAllow;
+  } catch {
+    notifyPromptError(ui);
+
+    return "error";
+  }
+}
+
+function buildConfigWriteConfirmationPrompt(target: ConfigPromptTarget, request: DisallowedRequest, entry: string): string {
+  return [
+    `ProtectMe will add ${entry} to ${target} config.`,
+    `Blocked request host: ${request.candidate.host}`,
+    "Confirm this config change before allowing the current call.",
+  ].join("\n");
 }
 
 async function mutateTargetConfig(

@@ -1,6 +1,6 @@
 # ProtectMe Structure Guide
 
-ProtectMe is a Pi extension package for network and website access guardrails. The current implementation includes config parsing/merging/write-back, host normalization and allow matching, supported bash request extraction, blocked-attempt logging, session lifecycle status/warnings, first-attempt blocking, repeated-attempt prompts, allow-mode bypass behavior, and the `/protectme` TUI configuration panel with editing actions.
+ProtectMe is a Pi extension package for network and website access guardrails. The current implementation includes config parsing/merging/write-back, host normalization and allow matching, supported bash request extraction, blocked-attempt logging, session lifecycle status/warnings, first-attempt blocking, repeated-attempt prompts, allow-mode bypass behavior, and a one-box `/protectme` TUI configuration panel with in-panel confirmation flows.
 
 ## Current implementation layout
 
@@ -27,8 +27,8 @@ src/
 │   ├── protectme-panel.ts        # /protectme command registration and command-mode gating
 │   └── protectme-panel/
 │       ├── actions.ts            # TUI action orchestration and config-write refresh behavior
-│       ├── component.ts          # keyboard routing, panel state, and render caching
-│       ├── rendering.ts          # pure responsive layout, settings rows, and text fitting
+│       ├── component.ts          # keyboard routing, in-panel dialogs, panel state, and render caching
+│       ├── rendering.ts          # pure one-box layout, dialog rows, settings rows, and text fitting
 │       └── types.ts              # shared TUI panel contracts
 ├── constants.ts                  # shared names, command name, status key, config/log paths
 └── extension.ts                  # composition root that calls register* hooks only

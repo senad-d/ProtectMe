@@ -37,6 +37,9 @@ export interface EffectiveProtectMeConfig extends ProtectMeConfig {
 }
 
 export interface ProtectMeConfigPathSummary {
+  cwd?: string;
+  homeDir?: string;
+  agentDir?: string;
   globalConfigPath: string;
   projectConfigPath: string;
   blockedAttemptLogPath: string;

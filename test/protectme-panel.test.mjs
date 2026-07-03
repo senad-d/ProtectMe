@@ -25,29 +25,31 @@ const cwd = "/workspace/project";
 const homeDir = "/home/user";
 const agentDir = `${homeDir}/.pi/agent`;
 
-test("ProtectMe panel wide layout uses two panes and displays config state", () => {
+test("ProtectMe panel wide layout uses one framed box and displays config state", () => {
   const component = createPanelComponent();
   const lines = component.render(96);
 
   assert.equal(lines[0].startsWith("╭"), true);
-  assert.equal(lines.some((line) => line.includes("┬")), true);
-  assert.equal(lines.some((line) => line.includes("Configuration")), true);
-  assert.equal(lines.some((line) => line.includes("Global config path") && line.includes("/global/protectme.json")), true);
-  assert.equal(lines.some((line) => line.includes("Project config path") && line.includes("/project/protectme.json")), true);
+  assert.equal(lines.some((line) => line.includes("┬")), false);
+  assert.equal(lines.some((line) => line.includes("CONFIGURATION")), true);
+  assert.equal(lines.some((line) => line.includes("INFO")), true);
+  assert.equal(lines.some((line) => line.includes("Config path") && line.includes("/global/protectme.json")), true);
+  assert.equal(lines.some((line) => line.includes("Pi project trust path") && line.includes("/project/protectme.json")), true);
   assert.equal(lines.some((line) => line.includes("Effective mode") && line.includes("block")), true);
+  assert.equal(lines.some((line) => line.includes("Edit allow-list entry")), true);
   assert.equal(lines.some((line) => line.includes("Global site count") && line.includes("2")), true);
   assert.equal(lines.some((line) => line.includes("Project site count") && line.includes("1")), true);
-  assert.equal(lines.some((line) => line.includes("Effective site count") && line.includes("3")), true);
-  assert.equal(lines.some((line) => line.includes("Recent blocked hosts") && line.includes("api.example.com")), true);
+  assert.equal(lines.some((line) => line.includes("Effective site count")), false);
+  assert.equal(lines.some((line) => line.includes("api.example.com")), false);
   assertLinesFit(lines, 96);
 });
 
 test("ProtectMe panel rendering helper renders without the component state machine", () => {
   const lines = renderProtectMePanel(96, buildPanelState(), 1, "global", { text: "Saved global config.", type: "info" }, plainTheme);
 
-  assert.equal(lines.some((line) => line.includes("writes global config")), true);
+  assert.equal(lines.some((line) => line.includes("Config path")), true);
   assert.equal(lines.some((line) => line.includes("Saved global config.")), true);
-  assert.equal(lines.some((line) => line.includes("Write target") && line.includes("▶")), true);
+  assert.equal(lines.some((line) => line.includes("Edit allow-list entry") && line.includes("▶")), true);
   assertLinesFit(lines, 96);
 });
 
@@ -85,7 +87,7 @@ test("ProtectMe panel closes with q and rerenders after selection movement", () 
   component.handleInput("q");
 
   assert.equal(renderRequests, 1);
-  assert.equal(linesAfterMove.some((line) => line.includes("Write target") && line.includes("▶")), true);
+  assert.equal(linesAfterMove.some((line) => line.includes("Edit allow-list entry") && line.includes("▶")), true);
   assert.equal(closed, true);
 });
 
@@ -113,16 +115,18 @@ test("/protectme command displays ignored project config state for untrusted pro
   assert.equal(context.ui.renderedLines.some((line) => line.includes("project config ignored")), true);
 });
 
-test("ProtectMe panel action chooses the project or global write target", async () => {
+test("ProtectMe panel opens recent blocked hosts inside the same box", () => {
   const editable = createEditablePanel();
 
   editable.component.handleInput("\u001b[B");
-  editable.ui.selectChoices.push("Global config");
+  editable.component.handleInput("\u001b[B");
   editable.component.handleInput("\r");
-  await flushPanelActions();
+  const lines = editable.component.render(96);
 
-  assert.deepEqual(editable.ui.selectCalls, [{ title: "ProtectMe write target", options: ["Project config", "Global config"] }]);
-  assert.equal(editable.component.render(96).some((line) => line.includes("writes global config")), true);
+  assert.equal(lines.some((line) => line.includes("RECENT BLOCKED HOSTS")), true);
+  assert.equal(lines.some((line) => line.includes("1. api.example.com")), true);
+  assert.equal(lines.some((line) => line.includes("Enter/Esc back")), true);
+  assertLinesFit(lines, 96);
 });
 
 test("ProtectMe panel action executor toggles mode without the component state machine", async () => {
@@ -132,44 +136,64 @@ test("ProtectMe panel action executor toggles mode without the component state m
 
   assert.deepEqual(result, { status: "success", message: "Saved project mode allow." });
   assert.deepEqual(editable.projectWrites.at(-1).config, { mode: "allow", allowList: ["project.example.com"] });
-  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "ProtectMe: allow · 2 sites" });
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "🌐 (2 sites)" });
 });
 
-test("ProtectMe panel actions toggle mode and add project/global entries", async () => {
+test("ProtectMe panel confirms mode changes and adds project/global entries", async () => {
   const editable = createEditablePanel();
 
+  editable.component.handleInput("\r");
+  assert.equal(editable.projectWrites.length, 0);
   editable.component.handleInput("\r");
   await flushPanelActions();
 
   assert.equal(editable.state.config.effective.mode, "allow");
   assert.deepEqual(editable.projectWrites.at(-1).config, { mode: "allow", allowList: ["project.example.com"] });
-  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "ProtectMe: allow · 2 sites" });
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "🌐 (2 sites)" });
 
-  editable.ui.editorValues.push("https://New.Example.com/path?q=1");
-  editable.component.handleInput("a");
+  editable.state.recentBlockedHosts = [];
+  editable.component.handleInput("\u001b[B");
+  editable.component.handleInput("\r");
+  editable.component.handleInput("https://New.Example.com/path?q=1");
+  editable.component.handleInput("\r");
+  assert.equal(editable.projectWrites.length, 1);
+  editable.component.handleInput("\r");
   await flushPanelActions();
 
   assert.deepEqual(editable.projectWrites.at(-1).config, {
     mode: "allow",
     allowList: ["project.example.com", "new.example.com"],
   });
-  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "ProtectMe: allow · 3 sites" });
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "🌐 (3 sites)" });
 
-  editable.component.handleInput("g");
   editable.ui.editorValues.push("Global-Add.example.com");
-  editable.component.handleInput("a");
-  await flushPanelActions();
+  await executeProtectMePanelAction("addEntry", "global", editable.state, editable.actionDependencies);
 
   assert.deepEqual(editable.globalWrites.at(-1).config, {
     mode: "block",
     allowList: ["global.example.com", "global-add.example.com"],
   });
   assert.equal(editable.state.config.effective.allowList.length, 4);
-  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "ProtectMe: allow · 4 sites" });
-  assert.equal(editable.component.render(96).some((line) => line.includes("Effective site count") && line.includes("4")), true);
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "🌐 (4 sites)" });
+  assert.equal(editable.component.render(96).some((line) => line.includes("Project site count") && line.includes("2")), true);
 });
 
-test("ProtectMe panel actions remove entries from project and global configs", async () => {
+test("ProtectMe panel cancels in-panel edits without saving", () => {
+  const editable = createEditablePanel();
+
+  editable.component.handleInput("\r");
+  editable.component.handleInput("\u001b");
+  editable.component.handleInput("\u001b[B");
+  editable.component.handleInput("\r");
+  editable.component.handleInput("cancel.example.com");
+  editable.component.handleInput("\u001b");
+
+  assert.equal(editable.projectWrites.length, 0);
+  assert.equal(editable.globalWrites.length, 0);
+  assert.equal(editable.component.render(96).some((line) => line.includes("CONFIGURATION")), true);
+});
+
+test("ProtectMe panel action executor removes entries from project and global configs", async () => {
   const editable = createEditablePanel(
     buildEditableConfigResult(
       { mode: "block", allowList: ["global.example.com", "keep-global.example.com"] },
@@ -178,15 +202,12 @@ test("ProtectMe panel actions remove entries from project and global configs", a
   );
 
   editable.ui.selectChoices.push("project.example.com");
-  editable.component.handleInput("r");
-  await flushPanelActions();
+  await executeProtectMePanelAction("removeEntry", "project", editable.state, editable.actionDependencies);
 
   assert.deepEqual(editable.projectWrites.at(-1).config, { allowList: ["keep-project.example.com"] });
 
-  editable.component.handleInput("g");
   editable.ui.selectChoices.push("global.example.com");
-  editable.component.handleInput("r");
-  await flushPanelActions();
+  await executeProtectMePanelAction("removeEntry", "global", editable.state, editable.actionDependencies);
 
   assert.deepEqual(editable.globalWrites.at(-1).config, { mode: "block", allowList: ["keep-global.example.com"] });
   assert.equal(editable.state.config.effective.allowList.length, 2);
@@ -200,11 +221,15 @@ test("ProtectMe panel status refresh surfaces bounded warnings after successful 
     ),
   );
 
-  editable.ui.editorValues.push("new.example.com");
-  editable.component.handleInput("a");
+  editable.state.recentBlockedHosts = [];
+  editable.component.handleInput("\u001b[B");
+  editable.component.handleInput("\r");
+  editable.component.handleInput("new.example.com");
+  editable.component.handleInput("\r");
+  editable.component.handleInput("\r");
   await flushPanelActions();
 
-  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "ProtectMe: block · 3 sites" });
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "🌐 (3 sites)" });
   assert.equal(editable.ui.notifications[0].type, "warning");
   assert.match(editable.ui.notifications[0].message, /ProtectMe config warning: global allowList entry ignored/u);
   assert.match(editable.ui.notifications[0].message, /\+1 more/u);
@@ -234,7 +259,12 @@ test("ProtectMe panel write failures show errors and keep loaded config unchange
     },
   });
 
-  component.handleInput("a");
+  state.recentBlockedHosts = [];
+  component.handleInput("\u001b[B");
+  component.handleInput("\r");
+  component.handleInput("fail.example.com");
+  component.handleInput("\r");
+  component.handleInput("\r");
   await flushPanelActions();
 
   assert.equal(state.config, initialConfig);
@@ -250,14 +280,14 @@ test("ProtectMe panel write failures show errors and keep loaded config unchange
 test("ProtectMe panel rejects project config edits while project config is ignored", async () => {
   const editable = createEditablePanel(buildIgnoredProjectConfigResult());
 
-  editable.ui.editorValues.push("project-only.example.com");
-  editable.component.handleInput("a");
+  editable.component.handleInput("\u001b[B");
+  editable.component.handleInput("\r");
   await flushPanelActions();
 
   assert.equal(editable.ui.editorCalls.length, 0);
   assert.equal(editable.projectWrites.length, 0);
-  assert.match(editable.ui.notifications[0].message, /project config is ignored/u);
-  assert.equal(editable.component.render(96).some((line) => line.includes("project config ignored")), true);
+  assert.equal(editable.ui.notifications.length, 0);
+  assert.equal(editable.component.render(140).some((line) => line.includes("project config is ignored")), true);
 });
 
 test("/protectme command explains TUI requirement outside TUI mode", async () => {
@@ -498,7 +528,7 @@ function createFakeCommandContext(mode, options = {}) {
         {},
         () => {},
       );
-      this.renderedLines = component.render(96);
+      this.renderedLines = component.render(140);
     },
     notify(message, type) {
       this.notifications.push({ message, type });

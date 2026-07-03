@@ -3,6 +3,7 @@
 ## 0.1.0 - Unreleased
 
 - Prepared ProtectMe package identity as `@senad-d/protectme`.
+- Added an `npm run open:google` helper that opens Google in the default browser.
 - Added approved project definition brief and three implementation specs.
 - Documented planned network guard behavior, config schema, TUI plan, and security model.
 - Replaced template runtime examples with a preparation-only extension entry point.
@@ -39,3 +40,4 @@
 - Bounded `/protectme` recent blocked-host log reads and documented append-only log cleanup guidance.
 - Split the `/protectme` TUI panel into separate command, component, action, rendering, and shared-type modules.
 - Standardized CI dependency installation on `npm ci --ignore-scripts` to match Sonar lockfile validation.
+- Reworked the `/protectme` TUI into a one-box configuration/info layout with in-panel mode confirmation, allow-list entry confirmation, blocked-host log viewing, compact `🌐 (n sites)` status text, and final confirmation before repeated-attempt prompt config writes.

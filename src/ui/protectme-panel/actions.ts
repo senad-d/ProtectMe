@@ -37,8 +37,9 @@ export async function executeProtectMePanelAction(
   if (action === "chooseWriteTarget") return chooseProtectMePanelWriteTarget(dependencies);
   if (action === "toggleMode") return toggleProtectMePanelMode(writeTarget, state, dependencies);
   if (action === "addEntry") return addProtectMePanelEntry(writeTarget, state, dependencies);
+  if (action === "removeEntry") return removeProtectMePanelEntry(writeTarget, state, dependencies);
 
-  return removeProtectMePanelEntry(writeTarget, state, dependencies);
+  return cancelProtectMePanelAction("Recent blocked hosts opened.");
 }
 
 async function chooseProtectMePanelWriteTarget(dependencies: ProtectMePanelActionDependencies): Promise<ProtectMePanelActionResult> {
@@ -63,14 +64,7 @@ async function toggleProtectMePanelMode(
   state: ProtectMePanelState,
   dependencies: ProtectMePanelActionDependencies,
 ): Promise<ProtectMePanelActionResult> {
-  const source = selectProtectMeConfigEditSource(state.config, writeTarget);
-  const unsafeResult = buildUnsafeSourceActionResult(source, dependencies);
-  if (unsafeResult) return unsafeResult;
-
-  const nextMode = getNextProtectMeMode(state.config.effective.mode);
-  const mutation = (currentConfig: ProtectMeConfigFile) => setProtectMeConfigMode(currentConfig, nextMode);
-
-  return saveProtectMePanelConfig(writeTarget, state, dependencies, mutation, `Saved ${writeTarget} mode ${nextMode}.`);
+  return saveProtectMePanelMode(writeTarget, state, dependencies, getNextProtectMeMode(state.config.effective.mode));
 }
 
 async function addProtectMePanelEntry(
@@ -88,12 +82,7 @@ async function addProtectMePanelEntry(
   const editedEntry = await ui.editor(`ProtectMe add ${writeTarget} allow-list entry`, buildAddEntryPrefill(state));
   if (editedEntry === undefined) return cancelProtectMePanelAction("Add entry cancelled.");
 
-  const appendPlan = planProtectMeConfigAllowListAppend(source, editedEntry);
-  if (!appendPlan.ok) return failProtectMePanelAction(dependencies, appendPlan.reason);
-
-  const mutation = (currentConfig: ProtectMeConfigFile) => appendProtectMeConfigAllowListEntry(currentConfig, appendPlan.entry);
-
-  return saveProtectMePanelConfig(writeTarget, state, dependencies, mutation, `Saved ${appendPlan.entry} to ${writeTarget} config.`);
+  return saveProtectMePanelAllowListEntry(writeTarget, state, dependencies, editedEntry);
 }
 
 async function removeProtectMePanelEntry(
@@ -117,6 +106,39 @@ async function removeProtectMePanelEntry(
   const mutation = (currentConfig: ProtectMeConfigFile) => removeProtectMeConfigAllowListEntry(currentConfig, selectedEntry);
 
   return saveProtectMePanelConfig(writeTarget, state, dependencies, mutation, `Removed ${selectedEntry} from ${writeTarget} config.`);
+}
+
+export async function saveProtectMePanelMode(
+  writeTarget: ProtectMePanelWriteTarget,
+  state: ProtectMePanelState,
+  dependencies: ProtectMePanelActionDependencies,
+  nextMode: ProtectMeMode,
+): Promise<ProtectMePanelActionResult> {
+  const source = selectProtectMeConfigEditSource(state.config, writeTarget);
+  const unsafeResult = buildUnsafeSourceActionResult(source, dependencies);
+  if (unsafeResult) return unsafeResult;
+
+  const mutation = (currentConfig: ProtectMeConfigFile) => setProtectMeConfigMode(currentConfig, nextMode);
+
+  return saveProtectMePanelConfig(writeTarget, state, dependencies, mutation, `Saved ${writeTarget} mode ${nextMode}.`);
+}
+
+export async function saveProtectMePanelAllowListEntry(
+  writeTarget: ProtectMePanelWriteTarget,
+  state: ProtectMePanelState,
+  dependencies: ProtectMePanelActionDependencies,
+  editedEntry: string | undefined,
+): Promise<ProtectMePanelActionResult> {
+  const source = selectProtectMeConfigEditSource(state.config, writeTarget);
+  const unsafeResult = buildUnsafeSourceActionResult(source, dependencies);
+  if (unsafeResult) return unsafeResult;
+
+  const appendPlan = planProtectMeConfigAllowListAppend(source, editedEntry);
+  if (!appendPlan.ok) return failProtectMePanelAction(dependencies, appendPlan.reason);
+
+  const mutation = (currentConfig: ProtectMeConfigFile) => appendProtectMeConfigAllowListEntry(currentConfig, appendPlan.entry);
+
+  return saveProtectMePanelConfig(writeTarget, state, dependencies, mutation, `Saved ${appendPlan.entry} to ${writeTarget} config.`);
 }
 
 function hasPanelSelect(ui: ProtectMePanelActionUI | null): ui is ProtectMePanelActionUI & { select: NonNullable<ProtectMePanelActionUI["select"]> } {
