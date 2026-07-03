@@ -2,6 +2,7 @@
 
 ## 0.1.0 - Unreleased
 
+- Updated package keywords to improve discovery for Pi network-access guardrail, allow-list, and agent-security use cases.
 - Added a built-in starter allow list for local development and common developer sites, plus docs for adding local subdomains such as `app.localhost`.
 - Added five lively, text-free SVG application icon variants and refreshed the primary ProtectMe icon asset.
 - Added five dark, text-free globe safety SVG application icon variants and refreshed the primary icon to the first dark globe variant.

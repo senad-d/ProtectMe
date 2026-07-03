@@ -14,16 +14,29 @@
   },
   "homepage": "https://github.com/senad-d/protectme#readme",
   "keywords": [
+    "protectme",
+    "pi",
     "pi-package",
     "pi-extension",
     "pi-coding-agent",
+    "coding-agent",
+    "agent-security",
     "network",
-    "guardrail",
-    "security",
+    "network-security",
+    "network-access",
+    "website-access",
+    "egress-control",
+    "access-control",
+    "allowlist",
     "allow-list",
+    "guardrail",
+    "guardrails",
+    "bash",
+    "shell",
+    "curl",
+    "wget",
     "terminal",
-    "typescript",
-    "coding-agent"
+    "typescript"
   ],
   "engines": {
     "node": ">=22.19.0"
