@@ -427,6 +427,29 @@ test("second blocked attempt can add project config and allow the current call",
   assert.equal(fake.loggedAttempts.length, 1);
 });
 
+test("second blocked attempt preserves existing project mode while appending an allow-list entry", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildProjectBlockConfigResult());
+  const ctx = createFakeContext({
+    hasUI: true,
+    selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.addProject],
+    editorValues: ["api.example.com"],
+  });
+  const event = { toolName: "bash", input: { command: "curl https://api.example.com/v1" } };
+
+  await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
+  const result = await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
+
+  assert.equal(result, undefined);
+  assert.deepEqual(fake.projectWrites, [
+    {
+      paths: { projectConfigPath: `${cwd}/.pi/protectme.json` },
+      config: { mode: "block", allowList: ["existing.example.com", "api.example.com"] },
+    },
+  ]);
+  assert.equal(fake.globalWrites.length, 0);
+});
+
 test("second blocked attempt can add global config and allow the current call", async () => {
   const state = createNetworkGuardState();
   const fake = createFakeDependencies(buildConfigResult());
@@ -670,6 +693,28 @@ function buildProjectAllowOverGlobalBlockConfigResult() {
       allowList: ["blocked.example"],
       allowListSources: ["global"],
       configSources: [globalConfig, projectConfig],
+    },
+  };
+}
+
+function buildProjectBlockConfigResult() {
+  const base = buildConfigResult({ allowList: ["existing.example.com"] });
+  const projectConfig = {
+    ...base.projectConfig,
+    status: "valid",
+    config: { mode: "block", allowList: ["existing.example.com"] },
+  };
+
+  return {
+    ...base,
+    projectConfig,
+    effective: {
+      ...base.effective,
+      mode: "block",
+      modeSource: "project",
+      allowList: ["existing.example.com"],
+      allowListSources: ["project"],
+      configSources: [base.globalConfig, projectConfig],
     },
   };
 }

@@ -2,13 +2,14 @@ import { homedir } from "node:os";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { EXTENSION_DISPLAY_NAME, EXTENSION_STATUS_KEY } from "../constants.ts";
 import {
+  appendProtectMeConfigAllowListEntry,
+  buildProtectMeConfigEditSourceError,
   loadProtectMeConfig,
   mutateGlobalProtectMeConfig,
   mutateProjectProtectMeConfig,
-  normalizeConfigAllowList,
-  normalizeConfigAllowListEntry,
+  planProtectMeConfigAllowListAppend,
+  selectProtectMeConfigEditSource,
   type ParsedProtectMeConfig,
   type ProtectMeConfigFile,
   type ProtectMeConfigLoadResult,
@@ -36,6 +37,18 @@ import {
   suggestCleanAllowListEntry,
   type BashNetworkRequestCandidate,
 } from "../policy/index.ts";
+import {
+  clearProtectMeSessionStatusFromContext,
+  syncProtectMeSessionStatusFromContext,
+} from "./protectme-session-status.ts";
+export {
+  buildProtectMeConfigWarningMessage,
+  buildProtectMeStatusText,
+  clearProtectMeSessionStatus,
+  clearProtectMeSessionStatusFromContext,
+  syncProtectMeSessionStatus,
+  syncProtectMeSessionStatusFromContext,
+} from "./protectme-session-status.ts";
 
 export const PROTECTME_SECOND_ATTEMPT_CHOICES = {
   allowOnce: "Allow once",
@@ -85,11 +98,6 @@ interface NetworkGuardPromptUI {
   notify?(message: string, type?: "info" | "warning" | "error"): void;
 }
 
-interface NetworkGuardStatusUI {
-  setStatus(key: string, text: string | undefined): void;
-  notify?(message: string, type?: "info" | "warning" | "error"): void;
-}
-
 interface NetworkGuardContextLike {
   cwd: string;
   hasUI?: boolean;
@@ -115,12 +123,6 @@ interface BlockDecision {
 
 type NetworkGuardDecision = AllowDecision | BlockDecision;
 type ConfigPromptTarget = "project" | "global";
-
-interface ConfigWritePlan {
-  ok: boolean;
-  entry?: string;
-  reason?: string;
-}
 
 export function createNetworkGuardState(): NetworkGuardState {
   return {
@@ -166,27 +168,11 @@ export async function handleNetworkGuardSessionStart(
   resetNetworkGuardSessionState(state);
 
   const config = await dependencies.loadConfig(buildNetworkGuardConfigLoadInput(ctx, dependencies));
-  updateNetworkGuardStatus(ctx, config);
-  notifyNetworkGuardConfigWarnings(ctx, config);
+  syncProtectMeSessionStatusFromContext(ctx, config);
 }
 
 export function handleNetworkGuardSessionShutdown(ctx: NetworkGuardContextLike): void {
-  clearNetworkGuardStatus(ctx);
-}
-
-export function buildProtectMeStatusText(config: ProtectMeConfigLoadResult): string {
-  const projectConfigStatus = formatIgnoredProjectConfigStatus(config);
-
-  return `${EXTENSION_DISPLAY_NAME}: ${config.effective.mode} · ${formatSiteCount(config.effective.allowList.length)}${projectConfigStatus}`;
-}
-
-export function buildProtectMeConfigWarningMessage(warnings: string[]): string | null {
-  if (warnings.length === 0) return null;
-
-  const visibleWarnings = warnings.slice(0, 3);
-  const overflow = warnings.length > visibleWarnings.length ? `; +${warnings.length - visibleWarnings.length} more` : "";
-
-  return `${EXTENSION_DISPLAY_NAME} config warning: ${visibleWarnings.join("; ")}${overflow}`;
+  clearProtectMeSessionStatusFromContext(ctx);
 }
 
 export async function handleNetworkGuardToolCall(
@@ -255,53 +241,6 @@ function readProjectTrusted(ctx: NetworkGuardContextLike): boolean {
   if (typeof ctx.isProjectTrusted !== "function") return true;
 
   return ctx.isProjectTrusted();
-}
-
-function updateNetworkGuardStatus(ctx: NetworkGuardContextLike, config: ProtectMeConfigLoadResult): void {
-  const ui = readStatusUI(ctx);
-  if (!ui) return;
-
-  ui.setStatus(EXTENSION_STATUS_KEY, buildProtectMeStatusText(config));
-}
-
-function notifyNetworkGuardConfigWarnings(ctx: NetworkGuardContextLike, config: ProtectMeConfigLoadResult): void {
-  const ui = readStatusUI(ctx);
-  if (!ui?.notify) return;
-
-  const message = buildProtectMeConfigWarningMessage(config.effective.warnings);
-  if (message) ui.notify(message, "warning");
-}
-
-function clearNetworkGuardStatus(ctx: NetworkGuardContextLike): void {
-  const ui = readStatusUI(ctx);
-  if (!ui) return;
-
-  ui.setStatus(EXTENSION_STATUS_KEY, undefined);
-}
-
-function readStatusUI(ctx: NetworkGuardContextLike): NetworkGuardStatusUI | null {
-  if (ctx.hasUI !== true) return null;
-  if (!isStatusUI(ctx.ui)) return null;
-
-  return ctx.ui;
-}
-
-function isStatusUI(value: unknown): value is NetworkGuardStatusUI {
-  if (!isRecord(value)) return false;
-
-  return typeof value.setStatus === "function";
-}
-
-function formatSiteCount(count: number): string {
-  const label = count === 1 ? "site" : "sites";
-
-  return `${count} ${label}`;
-}
-
-function formatIgnoredProjectConfigStatus(config: ProtectMeConfigLoadResult): string {
-  if (config.projectConfig.status !== "ignored") return "";
-
-  return " · project config ignored";
 }
 
 function findFirstDisallowedRequest(
@@ -381,8 +320,8 @@ async function allowViaConfigWrite(
   request: DisallowedRequest,
   dependencies: NetworkGuardDependencies,
 ): Promise<NetworkGuardDecision> {
-  const configSource = selectConfigSource(config, target);
-  const unsafeReason = buildUnsafeConfigSourceWriteReason(configSource);
+  const configSource = selectProtectMeConfigEditSource(config, target);
+  const unsafeReason = buildProtectMeConfigEditSourceError(configSource);
   if (unsafeReason) {
     notifyPromptFailure(ui, unsafeReason);
     return buildPromptDeniedDecision(request.candidate.host);
@@ -390,9 +329,9 @@ async function allowViaConfigWrite(
 
   const suggestedEntry = buildSuggestedAllowListEntry(request);
   const editedEntry = await ui.editor(buildAllowListEntryEditorTitle(target, request.candidate.host), suggestedEntry);
-  const writePlan = buildConfigWritePlan(configSource, editedEntry);
+  const writePlan = planProtectMeConfigAllowListAppend(configSource, editedEntry);
 
-  if (!writePlan.ok || !writePlan.entry) {
+  if (!writePlan.ok) {
     notifyPromptFailure(ui, writePlan.reason ?? "No allow-list entry was confirmed.");
     return buildPromptDeniedDecision(request.candidate.host);
   }
@@ -456,50 +395,6 @@ function buildAllowListEntryEditorTitle(target: ConfigPromptTarget, host: string
   return `ProtectMe ${target} allow-list entry for ${host}`;
 }
 
-function selectConfigSource(config: ProtectMeConfigLoadResult, target: ConfigPromptTarget): ParsedProtectMeConfig {
-  if (target === "project") return config.projectConfig;
-
-  return config.globalConfig;
-}
-
-function buildConfigWritePlan(configSource: ParsedProtectMeConfig, editedEntry: string | undefined): ConfigWritePlan {
-  if (editedEntry === undefined) return { ok: false, reason: "No allow-list entry was confirmed." };
-
-  const unsafeReason = buildUnsafeConfigSourceWriteReason(configSource);
-  if (unsafeReason) return { ok: false, reason: unsafeReason };
-
-  const normalizedEntry = normalizeConfigAllowListEntry(editedEntry);
-  if (!normalizedEntry) return { ok: false, reason: `Invalid allow-list entry: ${JSON.stringify(editedEntry)}` };
-
-  return {
-    ok: true,
-    entry: normalizedEntry,
-  };
-}
-
-function buildUnsafeConfigSourceWriteReason(configSource: ParsedProtectMeConfig): string | null {
-  if (configSource.status !== "invalid" && configSource.status !== "unreadable" && configSource.status !== "ignored") return null;
-
-  const detail = configSource.message ? `: ${configSource.message}` : "";
-
-  return `${configSource.source} config is ${configSource.status}${detail}`;
-}
-
-function appendAllowListEntry(config: ProtectMeConfigFile, normalizedEntry: string): ProtectMeConfigFile {
-  const rawAllowList = config.allowList ?? [];
-  const normalizedAllowList = normalizeConfigAllowList(rawAllowList);
-  const allowList = normalizedAllowList.includes(normalizedEntry) ? rawAllowList : [...rawAllowList, normalizedEntry];
-
-  return buildConfigFile(config, allowList);
-}
-
-function buildConfigFile(config: ProtectMeConfigFile, allowList: string[]): ProtectMeConfigFile {
-  const nextConfig: ProtectMeConfigFile = { allowList };
-  if (config.mode) nextConfig.mode = config.mode;
-
-  return nextConfig;
-}
-
 async function mutateTargetConfig(
   target: ConfigPromptTarget,
   config: ProtectMeConfigLoadResult,
@@ -507,11 +402,11 @@ async function mutateTargetConfig(
   dependencies: NetworkGuardDependencies,
 ): Promise<void> {
   if (target === "project") {
-    await dependencies.mutateProjectConfig(config.paths, (currentConfig) => appendAllowListEntry(currentConfig, normalizedEntry));
+    await dependencies.mutateProjectConfig(config.paths, (currentConfig) => appendProtectMeConfigAllowListEntry(currentConfig, normalizedEntry));
     return;
   }
 
-  await dependencies.mutateGlobalConfig(config.paths, (currentConfig) => appendAllowListEntry(currentConfig, normalizedEntry));
+  await dependencies.mutateGlobalConfig(config.paths, (currentConfig) => appendProtectMeConfigAllowListEntry(currentConfig, normalizedEntry));
 }
 
 function notifyPromptFailure(ui: NetworkGuardPromptUI, message: string): void {

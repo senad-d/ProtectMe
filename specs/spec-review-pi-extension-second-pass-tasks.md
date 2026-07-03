@@ -41,7 +41,7 @@
 
 ## Ordered unchecked tasks
 
-- [ ] Replace stale placeholder registration contracts with current module-role tests and comments
+- [x] Replace stale placeholder registration contracts with current module-role tests and comments
 
 #### Why
 
@@ -61,7 +61,7 @@
 - The update does not change runtime behavior.
 - Relevant focused tests and the full test suite pass.
 
-- [ ] Extract shared config edit helpers for prompt and panel write flows
+- [x] Extract shared config edit helpers for prompt and panel write flows
 
 #### Why
 
@@ -82,7 +82,7 @@
 - UI modules remain responsible only for interaction and presentation concerns.
 - Type-checking, linting, and tests pass.
 
-- [ ] Refresh ProtectMe session status after TUI config edits
+- [x] Refresh ProtectMe session status after TUI config edits
 
 #### Why
 
@@ -103,7 +103,7 @@
 - Existing panel rendering and edit behavior stays unchanged.
 - Focused TUI action tests and the full test suite pass.
 
-- [ ] Bound recent blocked-host log reads and define log-retention behavior
+- [x] Bound recent blocked-host log reads and define log-retention behavior
 
 #### Why
 

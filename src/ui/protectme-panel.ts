@@ -1,15 +1,21 @@
-import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import {
+  appendProtectMeConfigAllowListEntry,
+  buildProtectMeConfigEditSourceError,
   loadProtectMeConfig,
   mutateGlobalProtectMeConfig,
   mutateProjectProtectMeConfig,
   normalizeConfigAllowList,
   normalizeConfigAllowListEntry,
+  planProtectMeConfigAllowListAppend,
+  readProtectMeConfigSourceAllowListEntries,
+  removeProtectMeConfigAllowListEntry,
+  selectProtectMeConfigEditSource,
+  setProtectMeConfigMode,
   type ParsedProtectMeConfig,
   type ProtectMeConfigFile,
   type ProtectMeConfigLoadResult,
@@ -19,12 +25,15 @@ import {
   type ProtectMeMode,
 } from "../config/index.ts";
 import { EXTENSION_DISPLAY_NAME, PROTECTME_COMMAND_NAME } from "../constants.ts";
+import { syncProtectMeSessionStatus } from "../events/protectme-session-status.ts";
+import { readRecentBlockedHosts } from "../logging/blocked-attempt-log.ts";
 import { suggestCleanAllowListEntry } from "../policy/index.ts";
+
+export { extractRecentBlockedHosts, readRecentBlockedHosts } from "../logging/blocked-attempt-log.ts";
 
 const WIDE_MODE_MIN_WIDTH = 72;
 const TINY_MODE_MAX_WIDTH = 23;
 const MAX_VISIBLE_SETTINGS = 10;
-const MAX_RECENT_BLOCKED_HOSTS = 5;
 const PANEL_TITLE = EXTENSION_DISPLAY_NAME;
 const REQUIRED_TUI_MESSAGE = "/protectme requires Pi TUI mode.";
 const DEFAULT_WRITE_TARGET: ProtectMePanelWriteTarget = "project";
@@ -59,6 +68,7 @@ export interface ProtectMePanelTheme {
 export interface ProtectMePanelActionUI {
   select?(title: string, options: string[]): Promise<string | undefined>;
   editor?(title: string, prefill?: string): Promise<string | undefined>;
+  setStatus?(key: string, text: string | undefined): void;
   notify?(message: string, type?: "info" | "warning" | "error"): void;
 }
 
@@ -164,33 +174,6 @@ export async function handleProtectMeCommand(
   });
 
   return true;
-}
-
-export async function readRecentBlockedHosts(logPath: string, limit = MAX_RECENT_BLOCKED_HOSTS): Promise<string[]> {
-  try {
-    const text = await readFile(logPath, "utf8");
-    return extractRecentBlockedHosts(text, limit);
-  } catch (error) {
-    if (isMissingFileError(error)) return [];
-    return [];
-  }
-}
-
-export function extractRecentBlockedHosts(jsonlText: string, limit = MAX_RECENT_BLOCKED_HOSTS): string[] {
-  const hosts: string[] = [];
-  const seenHosts = new Set<string>();
-  const lines = jsonlText.trim().split("\n").filter(Boolean).reverse();
-
-  for (const line of lines) {
-    const host = readHostFromLogLine(line);
-    if (!host || seenHosts.has(host)) continue;
-
-    seenHosts.add(host);
-    hosts.push(host);
-    if (hosts.length >= limit) break;
-  }
-
-  return hosts;
 }
 
 export class ProtectMePanelComponent {
@@ -373,12 +356,12 @@ async function toggleProtectMePanelMode(
   state: ProtectMePanelState,
   dependencies: ProtectMePanelActionDependencies,
 ): Promise<ProtectMePanelActionResult> {
-  const source = selectConfigSource(state.config, writeTarget);
+  const source = selectProtectMeConfigEditSource(state.config, writeTarget);
   const unsafeResult = buildUnsafeSourceActionResult(source, dependencies);
   if (unsafeResult) return unsafeResult;
 
   const nextMode = getNextProtectMeMode(state.config.effective.mode);
-  const mutation = (currentConfig: ProtectMeConfigFile) => buildConfigWithMode(currentConfig, nextMode);
+  const mutation = (currentConfig: ProtectMeConfigFile) => setProtectMeConfigMode(currentConfig, nextMode);
 
   return saveProtectMePanelConfig(writeTarget, state, dependencies, mutation, `Saved ${writeTarget} mode ${nextMode}.`);
 }
@@ -391,19 +374,19 @@ async function addProtectMePanelEntry(
   const ui = dependencies.ui;
   if (!hasPanelEditor(ui)) return failProtectMePanelAction(dependencies, "Allow-list entry editor is unavailable.");
 
-  const source = selectConfigSource(state.config, writeTarget);
+  const source = selectProtectMeConfigEditSource(state.config, writeTarget);
   const unsafeResult = buildUnsafeSourceActionResult(source, dependencies);
   if (unsafeResult) return unsafeResult;
 
   const editedEntry = await ui.editor(`ProtectMe add ${writeTarget} allow-list entry`, buildAddEntryPrefill(state));
   if (editedEntry === undefined) return cancelProtectMePanelAction("Add entry cancelled.");
 
-  const normalizedEntry = normalizeConfigAllowListEntry(editedEntry);
-  if (!normalizedEntry) return failProtectMePanelAction(dependencies, `Invalid allow-list entry: ${JSON.stringify(editedEntry)}`);
+  const appendPlan = planProtectMeConfigAllowListAppend(source, editedEntry);
+  if (!appendPlan.ok) return failProtectMePanelAction(dependencies, appendPlan.reason);
 
-  const mutation = (currentConfig: ProtectMeConfigFile) => appendAllowListEntry(currentConfig, normalizedEntry);
+  const mutation = (currentConfig: ProtectMeConfigFile) => appendProtectMeConfigAllowListEntry(currentConfig, appendPlan.entry);
 
-  return saveProtectMePanelConfig(writeTarget, state, dependencies, mutation, `Saved ${normalizedEntry} to ${writeTarget} config.`);
+  return saveProtectMePanelConfig(writeTarget, state, dependencies, mutation, `Saved ${appendPlan.entry} to ${writeTarget} config.`);
 }
 
 async function removeProtectMePanelEntry(
@@ -414,17 +397,17 @@ async function removeProtectMePanelEntry(
   const ui = dependencies.ui;
   if (!hasPanelSelect(ui)) return failProtectMePanelAction(dependencies, "Allow-list entry selection is unavailable.");
 
-  const source = selectConfigSource(state.config, writeTarget);
+  const source = selectProtectMeConfigEditSource(state.config, writeTarget);
   const unsafeResult = buildUnsafeSourceActionResult(source, dependencies);
   if (unsafeResult) return unsafeResult;
 
-  const entries = normalizeConfigAllowList(source.config?.allowList ?? []);
+  const entries = readProtectMeConfigSourceAllowListEntries(source);
   if (entries.length === 0) return cancelProtectMePanelAction(`No ${writeTarget} entries to remove.`);
 
   const selectedEntry = await ui.select(`ProtectMe remove ${writeTarget} allow-list entry`, entries);
   if (!selectedEntry) return cancelProtectMePanelAction("Remove entry cancelled.");
 
-  const mutation = (currentConfig: ProtectMeConfigFile) => removeAllowListEntry(currentConfig, selectedEntry);
+  const mutation = (currentConfig: ProtectMeConfigFile) => removeProtectMeConfigAllowListEntry(currentConfig, selectedEntry);
 
   return saveProtectMePanelConfig(writeTarget, state, dependencies, mutation, `Removed ${selectedEntry} from ${writeTarget} config.`);
 }
@@ -437,61 +420,18 @@ function hasPanelEditor(ui: ProtectMePanelActionUI | null): ui is ProtectMePanel
   return typeof ui?.editor === "function";
 }
 
-function selectConfigSource(config: ProtectMeConfigLoadResult, writeTarget: ProtectMePanelWriteTarget): ParsedProtectMeConfig {
-  if (writeTarget === "project") return config.projectConfig;
-
-  return config.globalConfig;
-}
-
 function buildUnsafeSourceActionResult(
   configSource: ParsedProtectMeConfig,
   dependencies: ProtectMePanelActionDependencies,
 ): ProtectMePanelActionResult | null {
-  const message = buildUnsafeConfigSourceMessage(configSource);
+  const message = buildProtectMeConfigEditSourceError(configSource);
   if (!message) return null;
 
   return failProtectMePanelAction(dependencies, message);
 }
 
-function buildUnsafeConfigSourceMessage(configSource: ParsedProtectMeConfig): string | null {
-  if (configSource.status !== "invalid" && configSource.status !== "unreadable" && configSource.status !== "ignored") return null;
-
-  const detail = configSource.message ? `: ${configSource.message}` : "";
-
-  return `${configSource.source} config is ${configSource.status}${detail}`;
-}
-
 function getNextProtectMeMode(mode: ProtectMeMode): ProtectMeMode {
   return mode === "block" ? "allow" : "block";
-}
-
-function buildConfigWithMode(config: ProtectMeConfigFile, mode: ProtectMeMode): ProtectMeConfigFile {
-  const nextConfig: ProtectMeConfigFile = { mode };
-  if (config.allowList) nextConfig.allowList = config.allowList;
-
-  return nextConfig;
-}
-
-function appendAllowListEntry(config: ProtectMeConfigFile, normalizedEntry: string): ProtectMeConfigFile {
-  const rawAllowList = config.allowList ?? [];
-  const normalizedAllowList = normalizeConfigAllowList(rawAllowList);
-  const allowList = normalizedAllowList.includes(normalizedEntry) ? rawAllowList : [...rawAllowList, normalizedEntry];
-
-  return buildConfigWithAllowList(config, allowList);
-}
-
-function removeAllowListEntry(config: ProtectMeConfigFile, normalizedEntry: string): ProtectMeConfigFile {
-  const rawAllowList = config.allowList ?? [];
-  const allowList = rawAllowList.filter((entry) => normalizeConfigAllowListEntry(entry) !== normalizedEntry);
-
-  return buildConfigWithAllowList(config, allowList);
-}
-
-function buildConfigWithAllowList(config: ProtectMeConfigFile, allowList: string[]): ProtectMeConfigFile {
-  const nextConfig: ProtectMeConfigFile = { allowList };
-  if (config.mode) nextConfig.mode = config.mode;
-
-  return nextConfig;
 }
 
 function buildAddEntryPrefill(state: ProtectMePanelState): string {
@@ -513,6 +453,7 @@ async function saveProtectMePanelConfig(
   try {
     await mutateTargetConfig(writeTarget, state.config, dependencies, mutation);
     await refreshProtectMePanelState(state, dependencies);
+    syncProtectMeSessionStatus(dependencies.ui, state.config);
     notifyProtectMePanelInfo(dependencies, successMessage);
 
     return { status: "success", message: successMessage };
@@ -602,21 +543,6 @@ function readProjectTrusted(ctx: ProtectMeCommandContextLike): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-function isMissingFileError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
-}
-
-function readHostFromLogLine(line: string): string | null {
-  try {
-    const value = JSON.parse(line) as unknown;
-    if (!isRecord(value) || typeof value.host !== "string") return null;
-
-    return sanitizeCellText(value.host);
-  } catch {
-    return null;
-  }
 }
 
 function renderWidePanel(
@@ -768,7 +694,7 @@ function buildProtectMePanelSettings(state: ProtectMePanelState, writeTarget: Pr
 }
 
 function countTargetSites(config: ProtectMeConfigLoadResult, writeTarget: ProtectMePanelWriteTarget): number {
-  return countConfigSites(selectConfigSource(config, writeTarget).config?.allowList);
+  return readProtectMeConfigSourceAllowListEntries(selectProtectMeConfigEditSource(config, writeTarget)).length;
 }
 
 function countConfigSites(allowList: string[] | undefined): number {

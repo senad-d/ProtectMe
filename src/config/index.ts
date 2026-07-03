@@ -1,6 +1,16 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export {
+  appendProtectMeConfigAllowListEntry,
+  buildProtectMeConfigEditSourceError,
+  planProtectMeConfigAllowListAppend,
+  readProtectMeConfigSourceAllowListEntries,
+  removeProtectMeConfigAllowListEntry,
+  selectProtectMeConfigEditSource,
+  setProtectMeConfigMode,
+} from "./config-edit.ts";
+export type { ProtectMeAllowListEntryEditPlan, ProtectMeConfigEditTarget } from "./config-edit.ts";
+export {
   createDefaultEffectiveProtectMeConfig,
   createMissingProtectMeConfigSource,
   resolveMissingProtectMeConfig,
@@ -49,11 +59,11 @@ export type {
 } from "./config-types.ts";
 
 /**
- * Placeholder for future ProtectMe config setup.
+ * Register the ProtectMe config helper module with the composition root.
  *
- * Config parsing, merging, and write-back are implemented by later tasks. This
- * hook intentionally registers no runtime behavior yet.
+ * Config parsing, merging, path resolution, and write-back are exposed as pure
+ * helpers above. This module has no Pi runtime hooks to attach at startup.
  */
 export function registerProtectMeConfig(_pi: ExtensionAPI) {
-  // No config runtime behavior is registered in the scaffold task.
+  // Config helpers are imported by runtime modules; no Pi hooks are required here.
 }

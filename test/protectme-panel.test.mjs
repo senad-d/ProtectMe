@@ -125,6 +125,7 @@ test("ProtectMe panel actions toggle mode and add project/global entries", async
 
   assert.equal(editable.state.config.effective.mode, "allow");
   assert.deepEqual(editable.projectWrites.at(-1).config, { mode: "allow", allowList: ["project.example.com"] });
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "ProtectMe: allow · 2 sites" });
 
   editable.ui.editorValues.push("https://New.Example.com/path?q=1");
   editable.component.handleInput("a");
@@ -134,6 +135,7 @@ test("ProtectMe panel actions toggle mode and add project/global entries", async
     mode: "allow",
     allowList: ["project.example.com", "new.example.com"],
   });
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "ProtectMe: allow · 3 sites" });
 
   editable.component.handleInput("g");
   editable.ui.editorValues.push("Global-Add.example.com");
@@ -145,6 +147,7 @@ test("ProtectMe panel actions toggle mode and add project/global entries", async
     allowList: ["global.example.com", "global-add.example.com"],
   });
   assert.equal(editable.state.config.effective.allowList.length, 4);
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "ProtectMe: allow · 4 sites" });
   assert.equal(editable.component.render(96).some((line) => line.includes("Effective site count") && line.includes("4")), true);
 });
 
@@ -169,6 +172,25 @@ test("ProtectMe panel actions remove entries from project and global configs", a
 
   assert.deepEqual(editable.globalWrites.at(-1).config, { mode: "block", allowList: ["keep-global.example.com"] });
   assert.equal(editable.state.config.effective.allowList.length, 2);
+});
+
+test("ProtectMe panel status refresh surfaces bounded warnings after successful edits", async () => {
+  const editable = createEditablePanel(
+    buildEditableConfigResult(
+      { mode: "block", allowList: ["global.example.com", "bad host", "", "com", "co.uk"] },
+      { allowList: ["project.example.com"] },
+    ),
+  );
+
+  editable.ui.editorValues.push("new.example.com");
+  editable.component.handleInput("a");
+  await flushPanelActions();
+
+  assert.deepEqual(editable.ui.statusCalls.at(-1), { key: "protectme", text: "ProtectMe: block · 3 sites" });
+  assert.equal(editable.ui.notifications[0].type, "warning");
+  assert.match(editable.ui.notifications[0].message, /ProtectMe config warning: global allowList entry ignored/u);
+  assert.match(editable.ui.notifications[0].message, /\+1 more/u);
+  assert.deepEqual(editable.ui.notifications.at(-1), { message: "Saved new.example.com to project config.", type: "info" });
 });
 
 test("ProtectMe panel write failures show errors and keep loaded config unchanged", async () => {
@@ -318,6 +340,7 @@ function createFakeActionUi(options = {}) {
   const selectCalls = [];
   const editorCalls = [];
   const notifications = [];
+  const statusCalls = [];
 
   return {
     editorCalls,
@@ -325,6 +348,7 @@ function createFakeActionUi(options = {}) {
     notifications,
     selectCalls,
     selectChoices,
+    statusCalls,
     async select(title, choices) {
       selectCalls.push({ title, options: choices });
       return selectChoices.shift();
@@ -332,6 +356,9 @@ function createFakeActionUi(options = {}) {
     async editor(title, prefill) {
       editorCalls.push({ title, prefill });
       return editorValues.shift();
+    },
+    setStatus(key, text) {
+      statusCalls.push({ key, text });
     },
     notify(message, type) {
       notifications.push({ message, type });

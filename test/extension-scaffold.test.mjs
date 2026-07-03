@@ -10,13 +10,12 @@ const moduleRegistrations = [
   ["../src/events/network-guard.ts", "registerNetworkGuardEvents"],
   ["../src/ui/protectme-panel.ts", "registerProtectMeCommand"],
 ];
-const placeholderRegistrations = moduleRegistrations.filter(
-  ([, exportName]) => exportName !== "registerNetworkGuardEvents" && exportName !== "registerProtectMeCommand",
-);
+const runtimeModuleExportNames = new Set(["registerNetworkGuardEvents", "registerProtectMeCommand"]);
+const pureModuleRegistrations = moduleRegistrations.filter(([, exportName]) => !runtimeModuleExportNames.has(exportName));
 
 const directRuntimeRegistrationPattern = /(?:\bregisterCommand\b|\bregisterShortcut\b|\bregisterTool\b|\.on\s*\()/;
 
-test("extension entry point composes ProtectMe module registration shells only", async () => {
+test("extension entry point composes ProtectMe module registrations only", async () => {
   const source = await readFile(extensionUrl, "utf8");
   const expectedCalls = moduleRegistrations.map(([, exportName]) => exportName);
   const calls = [...source.matchAll(/^\s+(register[A-Za-z0-9]+)\(pi\);$/gm)].map((match) => match[1]);
@@ -36,8 +35,8 @@ test("ProtectMe module registrations remain discoverable", async () => {
   }
 });
 
-test("placeholder registrations still avoid runtime behavior", async () => {
-  for (const [relativePath] of placeholderRegistrations) {
+test("pure helper module registrations do not attach Pi runtime hooks", async () => {
+  for (const [relativePath] of pureModuleRegistrations) {
     const moduleUrl = new URL(relativePath, import.meta.url);
     const source = await readFile(moduleUrl, "utf8");
 

@@ -28,3 +28,7 @@
 - Added `/protectme` TUI editing actions for write-target selection, mode toggles, project/global allow-list additions, removals, refreshes, and safe write-error reporting.
 - Replaced preparation-phase documentation with implemented user guidance for installation, config schema, merge behavior, matching rules, block/prompt flow, `/protectme`, logs, validation, smoke testing, and security-sensitive behavior.
 - Added final package-content validation coverage and a documented manual isolated Pi smoke-test checklist.
+- Refreshed module registration comments and composition tests to describe current pure-helper roles.
+- Extracted shared ProtectMe config edit helpers for prompt and `/protectme` write flows.
+- Refreshed ProtectMe session footer status and bounded config warnings after successful `/protectme` edits.
+- Bounded `/protectme` recent blocked-host log reads and documented append-only log cleanup guidance.

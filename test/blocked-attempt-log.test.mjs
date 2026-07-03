@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
   appendBlockedAttemptLog,
   appendProtectMeRequestAttemptLog,
+  BLOCKED_ATTEMPT_LOG_RETENTION_DESCRIPTION,
   buildCommandSnippetMetadata,
+  readRecentBlockedHosts,
 } from "../src/logging/blocked-attempt-log.ts";
 import { resolveProtectMeConfigPaths } from "../src/config/index.ts";
 
@@ -132,6 +134,34 @@ test("command snippet metadata exposes truncation without file writes", () => {
   assert.equal(metadata.omittedCharacters > 0, true);
 });
 
+test("recent blocked-host reads use a bounded tail window for large logs", async () => {
+  const paths = createCasePaths("recent-tail");
+  const oldLogText = buildSyntheticOldLogText(10_000);
+  const tailLogText = buildRecentTailLogText();
+
+  await mkdir(dirname(paths.blockedAttemptLogPath), { recursive: true });
+  await writeFile(paths.blockedAttemptLogPath, `${oldLogText}${tailLogText}`, "utf8");
+
+  const hosts = await readRecentBlockedHosts(paths.blockedAttemptLogPath, 4, {
+    chunkBytes: 37,
+    maxScanBytes: Buffer.byteLength(tailLogText, "utf8") + 1,
+  });
+
+  assert.deepEqual(hosts, ["newest.example.com", "duplicate.example.com", "latest.example.com", "tail-old.example.com"]);
+  assert.equal(hosts.some((host) => host.startsWith("old-")), false);
+});
+
+test("blocked-attempt log retention policy is explicit and documentation-only", async () => {
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+
+  assert.match(BLOCKED_ATTEMPT_LOG_RETENTION_DESCRIPTION, /append-only/u);
+  assert.match(BLOCKED_ATTEMPT_LOG_RETENTION_DESCRIPTION, /does not compact, upload, or delete/u);
+  assert.match(BLOCKED_ATTEMPT_LOG_RETENTION_DESCRIPTION, /bounded tail window/u);
+  assert.match(readme, /append-only/u);
+  assert.match(readme, /bounded tail window/u);
+  assert.match(readme, /Delete or truncate `\.pi\/agent\/protectme_log\.jsonl`/u);
+});
+
 function createCasePaths(name) {
   caseIndex += 1;
 
@@ -170,6 +200,27 @@ function baseConfigSources(paths) {
       status: "missing",
     },
   ];
+}
+
+function buildSyntheticOldLogText(count) {
+  let text = "";
+
+  for (let index = 0; index < count; index += 1) {
+    text += `${JSON.stringify({ host: `old-${index}.example.com`, padding: "x".repeat(80) })}\n`;
+  }
+
+  return text;
+}
+
+function buildRecentTailLogText() {
+  return [
+    JSON.stringify({ host: "tail-old.example.com" }),
+    "{malformed",
+    JSON.stringify({ host: "duplicate.example.com" }),
+    JSON.stringify({ host: "latest.example.com" }),
+    JSON.stringify({ host: "duplicate.example.com" }),
+    JSON.stringify({ host: "newest.example.com" }),
+  ].join("\n").concat("\n");
 }
 
 async function readJsonLines(path) {

@@ -41,11 +41,12 @@ export type { HostMatchResult, NormalizedAllowListEntry, NormalizedAllowListResu
 export type { CleanPromptSuggestion, PromptSuggestionSource } from "./prompt-suggestion.ts";
 
 /**
- * Placeholder for future ProtectMe policy setup.
+ * Register the ProtectMe policy helper module with the composition root.
  *
- * Bash request extraction and runtime policy registration are implemented by
- * later tasks. This hook intentionally registers no runtime behavior yet.
+ * Bash request extraction, host normalization, allow-list matching, and prompt
+ * suggestions are exposed as pure helpers above. This module has no Pi runtime
+ * hooks to attach at startup.
  */
 export function registerProtectMePolicy(_pi: ExtensionAPI) {
-  // No policy runtime behavior is registered in the scaffold task.
+  // Policy helpers are imported by runtime modules; no Pi hooks are required here.
 }

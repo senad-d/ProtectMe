@@ -150,6 +150,8 @@ ProtectMe logs blocked attempts only at:
 
 Each line is JSON and includes bounded metadata such as timestamp, cwd, tool name, host, attempt count, mode, config source metadata, outcome, redacted request targets, and a redacted/truncated command snippet. URL credentials, sensitive query values, cookies, authorization headers, API keys, and common auth flags are redacted before persistence. Allowed requests are not logged.
 
+The log is project-local and append-only. ProtectMe does not compact, upload, or delete it automatically. `/protectme` reads only a bounded tail window when showing recent blocked hosts, so large historical logs do not need to be loaded into memory. Delete or truncate `.pi/agent/protectme_log.jsonl` when you no longer need local blocked-attempt history; ProtectMe recreates it on the next blocked attempt.
+
 ## Troubleshooting
 
 - Unexpected block: run `/protectme`, inspect the effective mode and counts, then add the intended host to project or global config.
