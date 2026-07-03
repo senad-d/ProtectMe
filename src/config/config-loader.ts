@@ -1,0 +1,322 @@
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+
+import { normalizeAllowListEntries } from "../policy/host-matcher.ts";
+import { normalizeHostInput } from "../policy/host-normalization.ts";
+import { resolveProtectMeConfigPaths, type ProtectMeConfigPathInput, type ProtectMeConfigPaths } from "./config-paths.ts";
+import {
+  DEFAULT_PROTECTME_MODE,
+  type EffectiveProtectMeConfig,
+  type ParsedProtectMeConfig,
+  type ProtectMeConfigFile,
+  type ProtectMeConfigLoadResult,
+  type ProtectMeConfigSource,
+  type ProtectMeMode,
+} from "./config-types.ts";
+
+const CONFIG_JSON_INDENT = 2;
+const PROJECT_CONFIG_IGNORED_MESSAGE = "Project config was not read because the current project is not trusted.";
+
+export function normalizeConfigAllowListEntry(rawEntry: string): string | null {
+  return normalizeHostInput(rawEntry).host;
+}
+
+export function normalizeConfigAllowList(entries: string[]): string[] {
+  return normalizeAllowListEntries(entries).entries;
+}
+
+export async function readProtectMeConfigSource(
+  source: ProtectMeConfigSource,
+  path: string,
+): Promise<ParsedProtectMeConfig> {
+  try {
+    const text = await readFile(path, "utf8");
+    return parseProtectMeConfigText(source, path, text);
+  } catch (error) {
+    return buildReadErrorConfigSource(source, path, error);
+  }
+}
+
+export function parseProtectMeConfigText(
+  source: ProtectMeConfigSource,
+  path: string,
+  text: string,
+): ParsedProtectMeConfig {
+  try {
+    return validateProtectMeConfigValue(source, path, JSON.parse(text) as unknown);
+  } catch (error) {
+    return {
+      source,
+      path,
+      status: "invalid",
+      message: buildJsonParseErrorMessage(error),
+      config: null,
+    };
+  }
+}
+
+export function mergeProtectMeConfigs(
+  globalConfig: ParsedProtectMeConfig,
+  projectConfig: ParsedProtectMeConfig,
+): EffectiveProtectMeConfig {
+  const configSources = [globalConfig, projectConfig];
+  const mode = resolveEffectiveMode(globalConfig, projectConfig);
+  const modeSource = resolveEffectiveModeSource(globalConfig, projectConfig);
+  const allowListMerge = mergeAllowListEntries(globalConfig, projectConfig);
+  const warnings = [...collectConfigWarnings(configSources), ...allowListMerge.warnings];
+
+  return {
+    mode,
+    allowList: allowListMerge.allowList,
+    modeSource,
+    allowListSources: allowListMerge.allowListSources,
+    configSources,
+    warnings,
+  };
+}
+
+export async function loadProtectMeConfig(input: ProtectMeConfigPathInput | ProtectMeConfigPaths): Promise<ProtectMeConfigLoadResult> {
+  const paths = "globalConfigPath" in input ? input : resolveProtectMeConfigPaths(input);
+  const globalConfig = await readProtectMeConfigSource("global", paths.globalConfigPath);
+  const projectConfig = shouldReadProjectConfig(input)
+    ? await readProtectMeConfigSource("project", paths.projectConfigPath)
+    : buildIgnoredProjectConfigSource(paths.projectConfigPath);
+
+  return {
+    paths,
+    globalConfig,
+    projectConfig,
+    effective: mergeProtectMeConfigs(globalConfig, projectConfig),
+  };
+}
+
+export async function writeProtectMeConfigFile(path: string, config: ProtectMeConfigFile): Promise<void> {
+  const serializedConfig = `${JSON.stringify(config, null, CONFIG_JSON_INDENT)}\n`;
+  const temporaryPath = buildTemporaryConfigPath(path);
+
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(temporaryPath, serializedConfig, "utf8");
+  await rename(temporaryPath, path);
+}
+
+export async function writeGlobalProtectMeConfig(
+  paths: Pick<ProtectMeConfigPaths, "globalConfigPath">,
+  config: ProtectMeConfigFile,
+): Promise<void> {
+  await writeProtectMeConfigFile(paths.globalConfigPath, config);
+}
+
+export async function writeProjectProtectMeConfig(
+  paths: Pick<ProtectMeConfigPaths, "projectConfigPath">,
+  config: ProtectMeConfigFile,
+): Promise<void> {
+  await writeProtectMeConfigFile(paths.projectConfigPath, config);
+}
+
+interface AllowListMergeResult {
+  allowList: string[];
+  allowListSources: ProtectMeConfigSource[];
+  warnings: string[];
+}
+
+function validateProtectMeConfigValue(
+  source: ProtectMeConfigSource,
+  path: string,
+  value: unknown,
+): ParsedProtectMeConfig {
+  if (!isPlainRecord(value)) return buildInvalidConfigSource(source, path, "Config root must be a JSON object.");
+
+  const mode = validateMode(value.mode);
+  if (mode === "invalid") {
+    return buildInvalidConfigSource(source, path, 'Config field "mode" must be "block" or "allow" when present.');
+  }
+
+  const allowList = validateAllowList(value.allowList);
+  if (allowList === "invalid") {
+    return buildInvalidConfigSource(source, path, 'Config field "allowList" must be an array of strings when present.');
+  }
+
+  return {
+    source,
+    path,
+    status: "valid",
+    config: buildConfigFile(mode, allowList),
+  };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validateMode(value: unknown): ProtectMeMode | undefined | "invalid" {
+  if (value === undefined) return undefined;
+  if (value === "block" || value === "allow") return value;
+
+  return "invalid";
+}
+
+function validateAllowList(value: unknown): string[] | undefined | "invalid" {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return "invalid";
+  if (!value.every((entry) => typeof entry === "string")) return "invalid";
+
+  return value;
+}
+
+function buildConfigFile(mode: ProtectMeMode | undefined, allowList: string[] | undefined): ProtectMeConfigFile {
+  const config: ProtectMeConfigFile = {};
+  if (mode) config.mode = mode;
+  if (allowList) config.allowList = allowList;
+
+  return config;
+}
+
+function buildInvalidConfigSource(
+  source: ProtectMeConfigSource,
+  path: string,
+  message: string,
+): ParsedProtectMeConfig {
+  return {
+    source,
+    path,
+    status: "invalid",
+    message,
+    config: null,
+  };
+}
+
+function buildIgnoredProjectConfigSource(path: string): ParsedProtectMeConfig {
+  return {
+    source: "project",
+    path,
+    status: "ignored",
+    message: PROJECT_CONFIG_IGNORED_MESSAGE,
+    config: null,
+  };
+}
+
+function buildReadErrorConfigSource(
+  source: ProtectMeConfigSource,
+  path: string,
+  error: unknown,
+): ParsedProtectMeConfig {
+  if (isNodeError(error) && error.code === "ENOENT") {
+    return {
+      source,
+      path,
+      status: "missing",
+      config: null,
+    };
+  }
+
+  return {
+    source,
+    path,
+    status: "unreadable",
+    message: buildReadErrorMessage(error),
+    config: null,
+  };
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
+}
+
+function buildJsonParseErrorMessage(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+
+  return `Invalid JSON: ${detail}`;
+}
+
+function buildReadErrorMessage(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+
+  return `Unable to read ProtectMe config: ${detail}`;
+}
+
+function collectConfigWarnings(configSources: ParsedProtectMeConfig[]): string[] {
+  return configSources
+    .filter(hasConfigWarning)
+    .map((configSource) => `${configSource.source} config ${configSource.status}: ${configSource.message ?? "unknown error"}`);
+}
+
+function hasConfigWarning(configSource: ParsedProtectMeConfig): boolean {
+  return configSource.status === "invalid" || configSource.status === "unreadable" || configSource.status === "ignored";
+}
+
+function resolveEffectiveMode(
+  globalConfig: ParsedProtectMeConfig,
+  projectConfig: ParsedProtectMeConfig,
+): ProtectMeMode {
+  if (projectConfig.status === "valid" && projectConfig.config?.mode) return projectConfig.config.mode;
+  if (globalConfig.status === "valid" && globalConfig.config?.mode) return globalConfig.config.mode;
+
+  return DEFAULT_PROTECTME_MODE;
+}
+
+function resolveEffectiveModeSource(
+  globalConfig: ParsedProtectMeConfig,
+  projectConfig: ParsedProtectMeConfig,
+): EffectiveProtectMeConfig["modeSource"] {
+  if (projectConfig.status === "valid" && projectConfig.config?.mode) return "project";
+  if (globalConfig.status === "valid" && globalConfig.config?.mode) return "global";
+
+  return "default";
+}
+
+function mergeAllowListEntries(
+  globalConfig: ParsedProtectMeConfig,
+  projectConfig: ParsedProtectMeConfig,
+): AllowListMergeResult {
+  const allowList: string[] = [];
+  const allowListSources: ProtectMeConfigSource[] = [];
+  const seenEntries = new Set<string>();
+
+  const warnings: string[] = [];
+
+  appendAllowListEntries(globalConfig, allowList, allowListSources, seenEntries, warnings);
+  appendAllowListEntries(projectConfig, allowList, allowListSources, seenEntries, warnings);
+
+  return { allowList, allowListSources, warnings };
+}
+
+function appendAllowListEntries(
+  configSource: ParsedProtectMeConfig,
+  allowList: string[],
+  allowListSources: ProtectMeConfigSource[],
+  seenEntries: Set<string>,
+  warnings: string[],
+): void {
+  if (configSource.status !== "valid" || !configSource.config?.allowList) return;
+
+  const normalizedAllowList = normalizeAllowListEntries(configSource.config.allowList);
+  let addedEntry = false;
+  for (const entry of normalizedAllowList.entries) {
+    if (seenEntries.has(entry)) continue;
+
+    seenEntries.add(entry);
+    allowList.push(entry);
+    addedEntry = true;
+  }
+
+  appendAllowListWarnings(configSource.source, warnings, normalizedAllowList.warnings);
+  if (addedEntry) allowListSources.push(configSource.source);
+}
+
+function appendAllowListWarnings(
+  source: ProtectMeConfigSource,
+  warnings: string[],
+  allowListWarnings: { input: string; message: string }[],
+): void {
+  for (const warning of allowListWarnings) {
+    warnings.push(`${source} allowList entry ignored (${JSON.stringify(warning.input)}): ${warning.message}`);
+  }
+}
+
+function shouldReadProjectConfig(input: ProtectMeConfigPathInput | ProtectMeConfigPaths): boolean {
+  return input.projectTrusted !== false;
+}
+
+function buildTemporaryConfigPath(path: string): string {
+  return `${path}.${process.pid}.${Date.now()}.tmp`;
+}
