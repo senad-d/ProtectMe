@@ -1,6 +1,6 @@
 {
   "name": "@senad-d/protectme",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Pi extension that guards agent network and website access with global and project allow lists.",
   "license": "MIT",
