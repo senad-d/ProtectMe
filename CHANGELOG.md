@@ -2,6 +2,7 @@
 
 ## 0.1.0 - Unreleased
 
+- Added a manual npm publish workflow that reads the package version, validates package contents, publishes with provenance, and pushes a matching release tag.
 - Consolidated bash URL extractor option parsing to reduce Sonar-reported duplication.
 - Reworked bash target-token loop advancement to avoid unused assignment lint failures.
 - Replaced host-normalization trailing-dot regex with linear string scanning.
