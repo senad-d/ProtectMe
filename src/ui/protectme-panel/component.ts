@@ -438,7 +438,7 @@ function readConfirmDialogWriteTarget(selectedOptionIndex: number): ProtectMePan
 function buildRecentHostLines(hosts: string[]): string[] {
   if (hosts.length === 0) return ["No blocked attempts logged."];
 
-  return hosts.map(formatRecentHostLine);
+  return hosts.map((host, index) => formatRecentHostLine(host, index));
 }
 
 function formatRecentHostLine(host: string, index: number): string {

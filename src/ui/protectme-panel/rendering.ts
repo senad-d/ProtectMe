@@ -151,9 +151,11 @@ function renderMainPanel(
 
   for (let index = 0; index < bodyHeight; index += 1) lines.push(renderFrameLine(width, rows[index] ?? "", theme));
 
-  lines.push(renderSeparator(width, theme));
-  lines.push(renderFrameLine(width, buildFooterText(state, selectedSettingIndex, writeTarget, statusMessage, theme), theme));
-  lines.push(renderBottomBorder(width, theme));
+  lines.push(
+    renderSeparator(width, theme),
+    renderFrameLine(width, buildFooterText(state, selectedSettingIndex, writeTarget, statusMessage, theme), theme),
+    renderBottomBorder(width, theme),
+  );
 
   return lines;
 }
@@ -172,9 +174,11 @@ function renderDialogPanel(
 
   for (let index = 0; index < bodyHeight; index += 1) lines.push(renderFrameLine(width, rows[index] ?? "", theme));
 
-  lines.push(renderSeparator(width, theme));
-  lines.push(renderFrameLine(width, buildDialogFooter(dialog, statusMessage, theme), theme));
-  lines.push(renderBottomBorder(width, theme));
+  lines.push(
+    renderSeparator(width, theme),
+    renderFrameLine(width, buildDialogFooter(dialog, statusMessage, theme), theme),
+    renderBottomBorder(width, theme),
+  );
 
   return lines;
 }
@@ -204,8 +208,7 @@ function renderMainRows(
     rows.push(renderSettingRow(innerWidth, settings[index]!, index === safeSelectedIndex, theme));
   }
 
-  rows.push("");
-  rows.push(renderSectionHeader(innerWidth, "Info", theme));
+  rows.push("", renderSectionHeader(innerWidth, "Info", theme));
   for (const setting of infoSettings) rows.push(renderSettingRow(innerWidth, setting, false, theme));
 
   return rows;

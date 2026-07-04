@@ -2,6 +2,14 @@
 
 ## 0.1.0 - Unreleased
 
+- Replaced host-normalization trailing-dot regex with linear string scanning.
+- Simplified bash variable-assignment matching with a concise word-character class.
+- Reduced bash command segment-splitting and tokenizing complexity with focused scan-state helpers.
+- Moved curl/wget and HTTPie long- and short-option token skipping into extractor loop update steps.
+- Replaced complex blocked-attempt sensitive-key matching with explicit helpers.
+- Replaced blocked-attempt URL credential and query-parameter redaction with linear scanning to avoid backtracking-prone matching.
+- Combined consecutive `/protectme` panel render-line pushes for cleaner array construction.
+- Wrapped recent blocked-host line formatting callbacks to pass intended arguments explicitly.
 - Updated package keywords to improve discovery for Pi network-access guardrail, allow-list, and agent-security use cases.
 - Added a built-in starter allow list for local development and common developer sites, plus docs for adding local subdomains such as `app.localhost`.
 - Added five lively, text-free SVG application icon variants and refreshed the primary ProtectMe icon asset.

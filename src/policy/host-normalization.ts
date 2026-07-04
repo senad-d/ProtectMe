@@ -109,7 +109,7 @@ function stripPort(host: string): string {
 }
 
 function normalizeHostCandidate(input: string, hostCandidate: string): HostNormalizationResult {
-  const host = stripIpv6Brackets(hostCandidate.trim().toLowerCase()).replace(/\.+$/u, "");
+  const host = stripTrailingDots(stripIpv6Brackets(hostCandidate.trim().toLowerCase()));
   const kind = classifyNormalizedHost(host);
   if (!kind) return buildHostNormalizationFailure(input, "invalid_host", "Host entry is not a valid DNS name, localhost, or IP address.");
 
@@ -125,6 +125,14 @@ function stripIpv6Brackets(host: string): string {
   if (host.startsWith("[") && host.endsWith("]")) return host.slice(1, -1);
 
   return host;
+}
+
+function stripTrailingDots(host: string): string {
+  let endIndex = host.length;
+
+  while (endIndex > 0 && host[endIndex - 1] === ".") endIndex -= 1;
+
+  return host.slice(0, endIndex);
 }
 
 function classifyNormalizedHost(host: string): NormalizedHostKind | null {

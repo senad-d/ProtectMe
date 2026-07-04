@@ -12,6 +12,20 @@ export const DEFAULT_RECENT_BLOCKED_HOST_READ_CHUNK_BYTES = 16 * 1024;
 export const BLOCKED_ATTEMPT_LOG_RETENTION_DESCRIPTION =
   "ProtectMe keeps project blocked-attempt logs append-only and project-local; it does not compact, upload, or delete .pi/agent/protectme_log.jsonl automatically, and /protectme reads only a bounded tail window.";
 export const REDACTED_LOG_VALUE = "[REDACTED]";
+const URL_SCHEME_SEPARATOR = "://";
+const SENSITIVE_EXACT_LOG_KEYS = new Set([
+  "auth",
+  "authorization",
+  "cookie",
+  "key",
+  "password",
+  "passwd",
+  "secret",
+  "session",
+  "sessionid",
+  "token",
+  "x-api-key",
+]);
 export const BLOCKED_ATTEMPT_LOG_OUTCOMES = ["blocked", "prompt_denied", "prompt_error", "prompt_unavailable"] as const;
 export const NON_BLOCKED_ATTEMPT_OUTCOMES = [
   "allowed",
@@ -327,15 +341,150 @@ function redactUrlCredentialsAndQuerySecrets(text: string): string {
 }
 
 function redactUrlUserInfo(text: string): string {
-  return text.replace(/([a-z][a-z0-9+.-]*:\/\/)([^/?#@\s'"]+)@/giu, `$1${REDACTED_LOG_VALUE}@`);
+  const redactedSegments: string[] = [];
+  let cursor = 0;
+  let separatorIndex = text.indexOf(URL_SCHEME_SEPARATOR);
+
+  while (separatorIndex !== -1) {
+    const userInfoStart = separatorIndex + URL_SCHEME_SEPARATOR.length;
+    const atIndex = hasUrlSchemeBeforeSeparator(text, separatorIndex) ? findUrlUserInfoAtIndex(text, userInfoStart) : null;
+
+    if (atIndex !== null) {
+      redactedSegments.push(text.slice(cursor, userInfoStart), REDACTED_LOG_VALUE, "@");
+      cursor = atIndex + 1;
+    }
+
+    separatorIndex = text.indexOf(URL_SCHEME_SEPARATOR, userInfoStart);
+  }
+
+  if (redactedSegments.length === 0) return text;
+
+  return `${redactedSegments.join("")}${text.slice(cursor)}`;
+}
+
+function hasUrlSchemeBeforeSeparator(text: string, separatorIndex: number): boolean {
+  for (let index = separatorIndex - 1; index >= 0; index -= 1) {
+    const character = text[index]!;
+    if (!isUrlSchemeCharacter(character)) return containsAsciiLetter(text, index + 1, separatorIndex);
+  }
+
+  return containsAsciiLetter(text, 0, separatorIndex);
+}
+
+function containsAsciiLetter(text: string, startIndex: number, endIndex: number): boolean {
+  for (let index = startIndex; index < endIndex; index += 1) {
+    if (isAsciiLetter(text[index]!)) return true;
+  }
+
+  return false;
+}
+
+function findUrlUserInfoAtIndex(text: string, startIndex: number): number | null {
+  for (let index = startIndex; index < text.length; index += 1) {
+    const character = text[index]!;
+    if (character === "@") return index === startIndex ? null : index;
+    if (isUrlUserInfoDelimiter(character)) return null;
+  }
+
+  return null;
+}
+
+function isUrlSchemeCharacter(character: string): boolean {
+  return isAsciiLetter(character) || isAsciiDigit(character) || character === "+" || character === "." || character === "-";
+}
+
+function isUrlUserInfoDelimiter(character: string): boolean {
+  return character === "/" || character === "?" || character === "#" || character === "'" || character === '"' || isWhitespaceCharacter(character);
+}
+
+function isAsciiLetter(character: string): boolean {
+  const codePoint = character.codePointAt(0) ?? 0;
+
+  return (codePoint >= 65 && codePoint <= 90) || (codePoint >= 97 && codePoint <= 122);
+}
+
+function isAsciiDigit(character: string): boolean {
+  const codePoint = character.codePointAt(0) ?? 0;
+
+  return codePoint >= 48 && codePoint <= 57;
+}
+
+function isWhitespaceCharacter(character: string): boolean {
+  return character.trim() === "";
 }
 
 function redactSensitiveQueryParameters(text: string): string {
-  return text.replace(/([?&])([^=&#\s'"]+)=([^&#\s'"]*)/giu, (match, prefix: string, key: string) => {
-    if (!isSensitiveKey(key)) return match;
+  const redactedSegments: string[] = [];
+  let cursor = 0;
+  let scanIndex = 0;
 
-    return `${prefix}${key}=${REDACTED_LOG_VALUE}`;
-  });
+  while (scanIndex < text.length) {
+    const prefixIndex = findNextQueryParameterPrefixIndex(text, scanIndex);
+    if (prefixIndex === null) break;
+
+    const parameter = readQueryParameterAt(text, prefixIndex);
+    if (parameter === null) {
+      scanIndex = prefixIndex + 1;
+      continue;
+    }
+
+    if (isSensitiveKey(parameter.key)) {
+      redactedSegments.push(text.slice(cursor, parameter.valueStart), REDACTED_LOG_VALUE);
+      cursor = parameter.valueEnd;
+    }
+
+    scanIndex = Math.max(parameter.valueEnd, prefixIndex + 1);
+  }
+
+  if (redactedSegments.length === 0) return text;
+
+  return `${redactedSegments.join("")}${text.slice(cursor)}`;
+}
+
+function findNextQueryParameterPrefixIndex(text: string, startIndex: number): number | null {
+  for (let index = startIndex; index < text.length; index += 1) {
+    const character = text[index]!;
+    if (character === "?" || character === "&") return index;
+  }
+
+  return null;
+}
+
+function readQueryParameterAt(
+  text: string,
+  prefixIndex: number,
+): { key: string; valueStart: number; valueEnd: number } | null {
+  const keyStart = prefixIndex + 1;
+  const separatorIndex = findQueryKeyValueSeparatorIndex(text, keyStart);
+  if (separatorIndex === null || separatorIndex === keyStart) return null;
+
+  return {
+    key: text.slice(keyStart, separatorIndex),
+    valueStart: separatorIndex + 1,
+    valueEnd: findQueryValueEndIndex(text, separatorIndex + 1),
+  };
+}
+
+function findQueryKeyValueSeparatorIndex(text: string, startIndex: number): number | null {
+  for (let index = startIndex; index < text.length; index += 1) {
+    const character = text[index]!;
+    if (character === "=") return index;
+    if (isQueryParameterTerminator(character)) return null;
+  }
+
+  return null;
+}
+
+function findQueryValueEndIndex(text: string, startIndex: number): number {
+  for (let index = startIndex; index < text.length; index += 1) {
+    if (isQueryParameterTerminator(text[index]!)) return index;
+  }
+
+  return text.length;
+}
+
+function isQueryParameterTerminator(character: string): boolean {
+  return character === "&" || character === "#" || character === "'" || character === '"' || isWhitespaceCharacter(character);
 }
 
 function redactSensitiveHeaders(command: string): string {
@@ -377,7 +526,19 @@ function isControlCharacter(character: string): boolean {
 }
 
 function isSensitiveKey(key: string): boolean {
-  return /^(?:access[_-]?token|api[_-]?key|auth|authorization|client[_-]?secret|cookie|id[_-]?token|key|password|passwd|secret|session(?:id)?|token|x-api-key)$/iu.test(key);
+  const normalizedKey = key.toLowerCase();
+
+  return (
+    SENSITIVE_EXACT_LOG_KEYS.has(normalizedKey) ||
+    isSeparatedSensitiveKey(normalizedKey, "access", "token") ||
+    isSeparatedSensitiveKey(normalizedKey, "api", "key") ||
+    isSeparatedSensitiveKey(normalizedKey, "client", "secret") ||
+    isSeparatedSensitiveKey(normalizedKey, "id", "token")
+  );
+}
+
+function isSeparatedSensitiveKey(key: string, prefix: string, suffix: string): boolean {
+  return key === `${prefix}${suffix}` || key === `${prefix}_${suffix}` || key === `${prefix}-${suffix}`;
 }
 
 /**

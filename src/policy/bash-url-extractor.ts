@@ -30,6 +30,20 @@ interface TargetToken {
   unsupportedReason?: string;
 }
 
+interface BashSegmentScanState {
+  currentSegment: string;
+  quote: BashQuote | null;
+  escaped: boolean;
+  skipNextCharacter: boolean;
+}
+
+interface BashTokenScanState {
+  currentToken: string;
+  quote: BashQuote | null;
+  escaped: boolean;
+}
+
+type BashQuote = "'" | '"';
 type OptionValueHandling = "network" | "plain" | "unsupported" | "url";
 type WrapperName = "command" | "env" | "exec" | "nice" | "sudo" | "time" | "timeout";
 
@@ -202,98 +216,133 @@ export function extractToolCallNetworkRequestCandidates(toolName: string, input:
 
 export function splitBashCommandSegments(command: string): string[] {
   const segments: string[] = [];
-  let currentSegment = "";
-  let quote: "'" | '"' | null = null;
-  let escaped = false;
+  let state = createInitialBashSegmentScanState();
 
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index] ?? "";
-    const nextCharacter = command[index + 1] ?? "";
-
-    if (escaped) {
-      currentSegment += character;
-      escaped = false;
-      continue;
-    }
-
-    if (character === "\\" && quote !== "'") {
-      currentSegment += character;
-      escaped = true;
-      continue;
-    }
-
-    if (quote) {
-      if (character === quote) quote = null;
-      currentSegment += character;
-      continue;
-    }
-
-    if (character === "'" || character === '"') {
-      quote = character;
-      currentSegment += character;
-      continue;
-    }
-
-    if (isSegmentSeparator(character, nextCharacter)) {
-      appendSegment(segments, currentSegment);
-      currentSegment = "";
-      if (isTwoCharacterSeparator(character, nextCharacter)) index += 1;
-      continue;
-    }
-
-    currentSegment += character;
+  for (let index = 0; index < command.length; index += state.skipNextCharacter ? 2 : 1) {
+    state = readNextBashSegmentState(command[index] ?? "", command[index + 1] ?? "", segments, state);
   }
 
-  appendSegment(segments, currentSegment);
+  appendSegment(segments, state.currentSegment);
 
   return segments;
 }
 
-export function tokenizeBashSegment(segment: string): string[] {
-  const tokens: string[] = [];
-  let currentToken = "";
-  let quote: "'" | '"' | null = null;
-  let escaped = false;
+function createInitialBashSegmentScanState(): BashSegmentScanState {
+  return {
+    currentSegment: "",
+    quote: null,
+    escaped: false,
+    skipNextCharacter: false,
+  };
+}
 
-  for (const character of segment) {
-    if (escaped) {
-      currentToken += character;
-      escaped = false;
-      continue;
-    }
-
-    if (character === "\\" && quote !== "'") {
-      escaped = true;
-      continue;
-    }
-
-    if (quote) {
-      if (character === quote) {
-        quote = null;
-      } else {
-        currentToken += character;
-      }
-      continue;
-    }
-
-    if (character === "'" || character === '"') {
-      quote = character;
-      continue;
-    }
-
-    if (/\s/u.test(character)) {
-      appendToken(tokens, currentToken);
-      currentToken = "";
-      continue;
-    }
-
-    currentToken += character;
+function readNextBashSegmentState(
+  character: string,
+  nextCharacter: string,
+  segments: string[],
+  state: BashSegmentScanState,
+): BashSegmentScanState {
+  if (state.escaped) return appendBashSegmentCharacter(state, character, { escaped: false });
+  if (character === "\\" && state.quote !== "'") return appendBashSegmentCharacter(state, character, { escaped: true });
+  if (state.quote) return appendBashSegmentCharacter(state, character, { quote: character === state.quote ? null : state.quote });
+  if (isBashQuoteCharacter(character)) return appendBashSegmentCharacter(state, character, { quote: character });
+  if (isSegmentSeparator(character, nextCharacter)) {
+    return splitCurrentBashSegment(segments, state, isTwoCharacterSeparator(character, nextCharacter));
   }
 
-  if (escaped) currentToken += "\\";
-  appendToken(tokens, currentToken);
+  return appendBashSegmentCharacter(state, character);
+}
+
+function appendBashSegmentCharacter(
+  state: BashSegmentScanState,
+  character: string,
+  updates: Partial<BashSegmentScanState> = {},
+): BashSegmentScanState {
+  return {
+    currentSegment: `${state.currentSegment}${character}`,
+    quote: state.quote,
+    escaped: state.escaped,
+    skipNextCharacter: false,
+    ...updates,
+  };
+}
+
+function splitCurrentBashSegment(
+  segments: string[],
+  state: BashSegmentScanState,
+  skipNextCharacter: boolean,
+): BashSegmentScanState {
+  appendSegment(segments, state.currentSegment);
+
+  return {
+    currentSegment: "",
+    quote: state.quote,
+    escaped: false,
+    skipNextCharacter,
+  };
+}
+
+function isBashQuoteCharacter(character: string): character is BashQuote {
+  return character === "'" || character === '"';
+}
+
+export function tokenizeBashSegment(segment: string): string[] {
+  const tokens: string[] = [];
+  let state = createInitialBashTokenScanState();
+
+  for (const character of segment) state = readNextBashTokenState(character, tokens, state);
+
+  if (state.escaped) state = appendBashTokenCharacter(state, "\\", { escaped: false });
+  appendToken(tokens, state.currentToken);
 
   return tokens;
+}
+
+function createInitialBashTokenScanState(): BashTokenScanState {
+  return {
+    currentToken: "",
+    quote: null,
+    escaped: false,
+  };
+}
+
+function readNextBashTokenState(character: string, tokens: string[], state: BashTokenScanState): BashTokenScanState {
+  if (state.escaped) return appendBashTokenCharacter(state, character, { escaped: false });
+  if (character === "\\" && state.quote !== "'") return { ...state, escaped: true };
+  if (state.quote) return readQuotedBashTokenState(character, state);
+  if (isBashQuoteCharacter(character)) return { ...state, quote: character };
+  if (/\s/u.test(character)) return splitCurrentBashToken(tokens, state);
+
+  return appendBashTokenCharacter(state, character);
+}
+
+function readQuotedBashTokenState(character: string, state: BashTokenScanState): BashTokenScanState {
+  if (character === state.quote) return { ...state, quote: null };
+
+  return appendBashTokenCharacter(state, character);
+}
+
+function appendBashTokenCharacter(
+  state: BashTokenScanState,
+  character: string,
+  updates: Partial<BashTokenScanState> = {},
+): BashTokenScanState {
+  return {
+    currentToken: `${state.currentToken}${character}`,
+    quote: state.quote,
+    escaped: state.escaped,
+    ...updates,
+  };
+}
+
+function splitCurrentBashToken(tokens: string[], state: BashTokenScanState): BashTokenScanState {
+  appendToken(tokens, state.currentToken);
+
+  return {
+    currentToken: "",
+    quote: state.quote,
+    escaped: false,
+  };
 }
 
 function buildUnsupportedCandidate(
@@ -366,7 +415,7 @@ function findSupportedCliInvocation(tokens: string[]): CliInvocation | null {
 }
 
 function isVariableAssignment(token: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*=/u.test(token);
+  return /^[A-Za-z_]\w*=/u.test(token);
 }
 
 function parseSupportedCliToken(token: string): SupportedBashNetworkCli | null {
@@ -584,8 +633,10 @@ function extractTargetTokens(cli: SupportedBashNetworkCli, tokens: string[], sta
 function extractCurlOrWgetTargetTokens(cli: SupportedBashNetworkCli, tokens: string[], startIndex: number): TargetToken[] {
   const targets: TargetToken[] = [];
   let optionParsing = true;
+  let tokenStep = 1;
 
-  for (let tokenIndex = startIndex; tokenIndex < tokens.length; tokenIndex += 1) {
+  for (let tokenIndex = startIndex; tokenIndex < tokens.length; tokenIndex += tokenStep) {
+    tokenStep = 1;
     const token = tokens[tokenIndex] ?? "";
 
     if (optionParsing && token === "--") {
@@ -594,12 +645,12 @@ function extractCurlOrWgetTargetTokens(cli: SupportedBashNetworkCli, tokens: str
     }
 
     if (optionParsing && token.startsWith("--")) {
-      tokenIndex = handleLongOption(cli, tokens, tokenIndex, targets);
+      tokenStep = calculateTokenStep(tokenIndex, handleLongOption(cli, tokens, tokenIndex, targets));
       continue;
     }
 
     if (optionParsing && isShortOptionToken(token)) {
-      tokenIndex = handleShortOption(cli, tokens, tokenIndex, targets);
+      tokenStep = calculateTokenStep(tokenIndex, handleShortOption(cli, tokens, tokenIndex, targets));
       continue;
     }
 
@@ -612,8 +663,10 @@ function extractCurlOrWgetTargetTokens(cli: SupportedBashNetworkCli, tokens: str
 function extractHttpieTargetTokens(cli: SupportedBashNetworkCli, tokens: string[], startIndex: number): TargetToken[] {
   const targets: TargetToken[] = [];
   let optionParsing = true;
+  let tokenStep = 1;
 
-  for (let tokenIndex = startIndex; tokenIndex < tokens.length; tokenIndex += 1) {
+  for (let tokenIndex = startIndex; tokenIndex < tokens.length; tokenIndex += tokenStep) {
+    tokenStep = 1;
     const token = tokens[tokenIndex] ?? "";
 
     if (optionParsing && token === "--") {
@@ -622,12 +675,12 @@ function extractHttpieTargetTokens(cli: SupportedBashNetworkCli, tokens: string[
     }
 
     if (optionParsing && token.startsWith("--")) {
-      tokenIndex = handleLongOption(cli, tokens, tokenIndex, targets);
+      tokenStep = calculateTokenStep(tokenIndex, handleLongOption(cli, tokens, tokenIndex, targets));
       continue;
     }
 
     if (optionParsing && isShortOptionToken(token)) {
-      tokenIndex = handleShortOption(cli, tokens, tokenIndex, targets);
+      tokenStep = calculateTokenStep(tokenIndex, handleShortOption(cli, tokens, tokenIndex, targets));
       continue;
     }
 
@@ -636,6 +689,10 @@ function extractHttpieTargetTokens(cli: SupportedBashNetworkCli, tokens: string[
   }
 
   return targets;
+}
+
+function calculateTokenStep(currentTokenIndex: number, handledTokenIndex: number): number {
+  return Math.max(1, handledTokenIndex - currentTokenIndex + 1);
 }
 
 function handleLongOption(
