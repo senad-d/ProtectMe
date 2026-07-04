@@ -633,28 +633,29 @@ function extractTargetTokens(cli: SupportedBashNetworkCli, tokens: string[], sta
 function extractCurlOrWgetTargetTokens(cli: SupportedBashNetworkCli, tokens: string[], startIndex: number): TargetToken[] {
   const targets: TargetToken[] = [];
   let optionParsing = true;
-  let tokenStep = 1;
+  let tokenIndex = startIndex;
 
-  for (let tokenIndex = startIndex; tokenIndex < tokens.length; tokenIndex += tokenStep) {
-    tokenStep = 1;
+  while (tokenIndex < tokens.length) {
     const token = tokens[tokenIndex] ?? "";
 
     if (optionParsing && token === "--") {
       optionParsing = false;
+      tokenIndex += 1;
       continue;
     }
 
     if (optionParsing && token.startsWith("--")) {
-      tokenStep = calculateTokenStep(tokenIndex, handleLongOption(cli, tokens, tokenIndex, targets));
+      tokenIndex += calculateTokenStep(tokenIndex, handleLongOption(cli, tokens, tokenIndex, targets));
       continue;
     }
 
     if (optionParsing && isShortOptionToken(token)) {
-      tokenStep = calculateTokenStep(tokenIndex, handleShortOption(cli, tokens, tokenIndex, targets));
+      tokenIndex += calculateTokenStep(tokenIndex, handleShortOption(cli, tokens, tokenIndex, targets));
       continue;
     }
 
     appendUrlLikeTarget(targets, token, tokenIndex);
+    tokenIndex += 1;
   }
 
   return targets;
@@ -663,29 +664,33 @@ function extractCurlOrWgetTargetTokens(cli: SupportedBashNetworkCli, tokens: str
 function extractHttpieTargetTokens(cli: SupportedBashNetworkCli, tokens: string[], startIndex: number): TargetToken[] {
   const targets: TargetToken[] = [];
   let optionParsing = true;
-  let tokenStep = 1;
+  let tokenIndex = startIndex;
 
-  for (let tokenIndex = startIndex; tokenIndex < tokens.length; tokenIndex += tokenStep) {
-    tokenStep = 1;
+  while (tokenIndex < tokens.length) {
     const token = tokens[tokenIndex] ?? "";
 
     if (optionParsing && token === "--") {
       optionParsing = false;
+      tokenIndex += 1;
       continue;
     }
 
     if (optionParsing && token.startsWith("--")) {
-      tokenStep = calculateTokenStep(tokenIndex, handleLongOption(cli, tokens, tokenIndex, targets));
+      tokenIndex += calculateTokenStep(tokenIndex, handleLongOption(cli, tokens, tokenIndex, targets));
       continue;
     }
 
     if (optionParsing && isShortOptionToken(token)) {
-      tokenStep = calculateTokenStep(tokenIndex, handleShortOption(cli, tokens, tokenIndex, targets));
+      tokenIndex += calculateTokenStep(tokenIndex, handleShortOption(cli, tokens, tokenIndex, targets));
       continue;
     }
 
-    if (HTTP_METHODS.has(token.toUpperCase())) continue;
+    if (HTTP_METHODS.has(token.toUpperCase())) {
+      tokenIndex += 1;
+      continue;
+    }
     appendUrlLikeTarget(targets, token, tokenIndex);
+    tokenIndex += 1;
   }
 
   return targets;

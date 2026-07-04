@@ -2,6 +2,7 @@
 
 ## 0.1.0 - Unreleased
 
+- Reworked bash target-token loop advancement to avoid unused assignment lint failures.
 - Replaced host-normalization trailing-dot regex with linear string scanning.
 - Simplified bash variable-assignment matching with a concise word-character class.
 - Reduced bash command segment-splitting and tokenizing complexity with focused scan-state helpers.
