@@ -2,6 +2,7 @@
 
 ## 0.1.0 - Unreleased
 
+- Consolidated bash URL extractor option parsing to reduce Sonar-reported duplication.
 - Reworked bash target-token loop advancement to avoid unused assignment lint failures.
 - Replaced host-normalization trailing-dot regex with linear string scanning.
 - Simplified bash variable-assignment matching with a concise word-character class.

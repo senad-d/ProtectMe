@@ -43,6 +43,13 @@ interface BashTokenScanState {
   escaped: boolean;
 }
 
+interface OptionValueHandlingRules {
+  networkValueFlags?: ReadonlySet<string>;
+  plainValueFlags?: ReadonlySet<string>;
+  unsupportedValueFlags?: ReadonlyMap<string, string>;
+  urlValueFlags?: ReadonlySet<string>;
+}
+
 type BashQuote = "'" | '"';
 type OptionValueHandling = "network" | "plain" | "unsupported" | "url";
 type WrapperName = "command" | "env" | "exec" | "nice" | "sudo" | "time" | "timeout";
@@ -149,6 +156,34 @@ const WGET_SHORT_NETWORK_VALUE_FLAGS = new Set(["e"]);
 const WGET_SHORT_UNSUPPORTED_VALUE_FLAGS = new Map([["i", WGET_INPUT_FILE_UNSUPPORTED_REASON]]);
 const WGET_SHORT_VALUE_FLAGS = new Set(["A", "D", "h", "O", "P", "Q", "T", "U"]);
 const HTTPIE_SHORT_VALUE_FLAGS = new Set(["a", "A", "c", "o", "p", "s"]);
+const CURL_LONG_OPTION_VALUE_RULES: OptionValueHandlingRules = {
+  networkValueFlags: CURL_LONG_NETWORK_VALUE_FLAGS,
+  plainValueFlags: CURL_LONG_VALUE_FLAGS,
+  unsupportedValueFlags: CURL_LONG_UNSUPPORTED_VALUE_FLAGS,
+  urlValueFlags: CURL_LONG_URL_VALUE_FLAGS,
+};
+const WGET_LONG_OPTION_VALUE_RULES: OptionValueHandlingRules = {
+  networkValueFlags: WGET_LONG_NETWORK_VALUE_FLAGS,
+  plainValueFlags: WGET_LONG_VALUE_FLAGS,
+  unsupportedValueFlags: WGET_LONG_UNSUPPORTED_VALUE_FLAGS,
+};
+const HTTPIE_LONG_OPTION_VALUE_RULES: OptionValueHandlingRules = {
+  networkValueFlags: HTTPIE_LONG_NETWORK_VALUE_FLAGS,
+  plainValueFlags: HTTPIE_LONG_VALUE_FLAGS,
+};
+const CURL_SHORT_OPTION_VALUE_RULES: OptionValueHandlingRules = {
+  networkValueFlags: CURL_SHORT_NETWORK_VALUE_FLAGS,
+  plainValueFlags: CURL_SHORT_VALUE_FLAGS,
+  unsupportedValueFlags: CURL_SHORT_UNSUPPORTED_VALUE_FLAGS,
+};
+const WGET_SHORT_OPTION_VALUE_RULES: OptionValueHandlingRules = {
+  networkValueFlags: WGET_SHORT_NETWORK_VALUE_FLAGS,
+  plainValueFlags: WGET_SHORT_VALUE_FLAGS,
+  unsupportedValueFlags: WGET_SHORT_UNSUPPORTED_VALUE_FLAGS,
+};
+const HTTPIE_SHORT_OPTION_VALUE_RULES: OptionValueHandlingRules = {
+  plainValueFlags: HTTPIE_SHORT_VALUE_FLAGS,
+};
 const SUDO_LONG_VALUE_OPTIONS = new Set([
   "--chdir",
   "--close-from",
@@ -487,13 +522,11 @@ function skipSudoWrapper(tokens: string[], wrapperIndex: number): number {
   while (tokenIndex < tokens.length) {
     const token = tokens[tokenIndex] ?? "";
     if (token === "--") return tokenIndex + 1;
-    if (!token.startsWith("-") || token === "-") return tokenIndex;
-    if (token.startsWith("--")) {
-      tokenIndex = skipLongWrapperOption(token, tokenIndex, SUDO_LONG_VALUE_OPTIONS);
-      continue;
-    }
 
-    tokenIndex = skipShortWrapperOption(token, tokenIndex, SUDO_SHORT_VALUE_OPTIONS);
+    const nextTokenIndex = skipWrapperOptionToken(token, tokenIndex, SUDO_LONG_VALUE_OPTIONS, SUDO_SHORT_VALUE_OPTIONS);
+    if (nextTokenIndex === null) return tokenIndex;
+
+    tokenIndex = nextTokenIndex;
   }
 
   return tokenIndex;
@@ -512,13 +545,11 @@ function skipEnvWrapper(tokens: string[], wrapperIndex: number): number {
       tokenIndex += 1;
       continue;
     }
-    if (!token.startsWith("-") || token === "-") return tokenIndex;
-    if (token.startsWith("--")) {
-      tokenIndex = skipLongWrapperOption(token, tokenIndex, ENV_LONG_VALUE_OPTIONS);
-      continue;
-    }
 
-    tokenIndex = skipShortWrapperOption(token, tokenIndex, ENV_SHORT_VALUE_OPTIONS);
+    const nextTokenIndex = skipWrapperOptionToken(token, tokenIndex, ENV_LONG_VALUE_OPTIONS, ENV_SHORT_VALUE_OPTIONS);
+    if (nextTokenIndex === null) return tokenIndex;
+
+    tokenIndex = nextTokenIndex;
   }
 
   return tokenIndex;
@@ -531,14 +562,12 @@ function skipTimeWrapper(tokens: string[], wrapperIndex: number): number {
     const token = tokens[tokenIndex] ?? "";
     if (token === "--") return tokenIndex + 1;
     if (TIME_NO_COMMAND_OPTIONS.has(token)) return tokens.length;
-    if (!token.startsWith("-") || token === "-") return tokenIndex;
-    if (token.startsWith("--")) {
-      tokenIndex = skipLongWrapperOption(token, tokenIndex, TIME_LONG_VALUE_OPTIONS);
-      continue;
-    }
-
     if (hasShortWrapperNoCommandOption(token, TIME_SHORT_NO_COMMAND_OPTIONS)) return tokens.length;
-    tokenIndex = skipShortWrapperOption(token, tokenIndex, TIME_SHORT_VALUE_OPTIONS);
+
+    const nextTokenIndex = skipWrapperOptionToken(token, tokenIndex, TIME_LONG_VALUE_OPTIONS, TIME_SHORT_VALUE_OPTIONS);
+    if (nextTokenIndex === null) return tokenIndex;
+
+    tokenIndex = nextTokenIndex;
   }
 
   return tokenIndex;
@@ -553,13 +582,11 @@ function skipTimeoutWrapper(tokens: string[], wrapperIndex: number): number {
       tokenIndex += 1;
       break;
     }
-    if (!token.startsWith("-") || token === "-") break;
-    if (token.startsWith("--")) {
-      tokenIndex = skipLongWrapperOption(token, tokenIndex, TIMEOUT_LONG_VALUE_OPTIONS);
-      continue;
-    }
 
-    tokenIndex = skipShortWrapperOption(token, tokenIndex, TIMEOUT_SHORT_VALUE_OPTIONS);
+    const nextTokenIndex = skipWrapperOptionToken(token, tokenIndex, TIMEOUT_LONG_VALUE_OPTIONS, TIMEOUT_SHORT_VALUE_OPTIONS);
+    if (nextTokenIndex === null) break;
+
+    tokenIndex = nextTokenIndex;
   }
 
   return tokenIndex < tokens.length ? tokenIndex + 1 : tokenIndex;
@@ -588,14 +615,26 @@ function skipNiceWrapper(tokens: string[], wrapperIndex: number): number {
   return tokenIndex;
 }
 
-function skipLongWrapperOption(token: string, tokenIndex: number, valueOptions: Set<string>): number {
+function skipWrapperOptionToken(
+  token: string,
+  tokenIndex: number,
+  longValueOptions: ReadonlySet<string>,
+  shortValueOptions: ReadonlySet<string>,
+): number | null {
+  if (!token.startsWith("-") || token === "-") return null;
+  if (token.startsWith("--")) return skipLongWrapperOption(token, tokenIndex, longValueOptions);
+
+  return skipShortWrapperOption(token, tokenIndex, shortValueOptions);
+}
+
+function skipLongWrapperOption(token: string, tokenIndex: number, valueOptions: ReadonlySet<string>): number {
   const details = parseLongOptionDetails(token);
   if (valueOptions.has(details.optionName) && details.inlineValue === null) return tokenIndex + 2;
 
   return tokenIndex + 1;
 }
 
-function skipShortWrapperOption(token: string, tokenIndex: number, valueOptions: Set<string>): number {
+function skipShortWrapperOption(token: string, tokenIndex: number, valueOptions: ReadonlySet<string>): number {
   const optionLetters = token.slice(1);
 
   for (let index = 0; index < optionLetters.length; index += 1) {
@@ -610,7 +649,9 @@ function skipShortWrapperOption(token: string, tokenIndex: number, valueOptions:
   return tokenIndex + 1;
 }
 
-function hasShortWrapperNoCommandOption(token: string, noCommandOptions: Set<string>): boolean {
+function hasShortWrapperNoCommandOption(token: string, noCommandOptions: ReadonlySet<string>): boolean {
+  if (!isShortOptionToken(token)) return false;
+
   const optionLetters = token.slice(1);
 
   for (const optionName of optionLetters) {
@@ -625,12 +666,6 @@ function isNiceAdjustmentToken(token: string): boolean {
 }
 
 function extractTargetTokens(cli: SupportedBashNetworkCli, tokens: string[], startIndex: number): TargetToken[] {
-  if (cli === "curl" || cli === "wget") return extractCurlOrWgetTargetTokens(cli, tokens, startIndex);
-
-  return extractHttpieTargetTokens(cli, tokens, startIndex);
-}
-
-function extractCurlOrWgetTargetTokens(cli: SupportedBashNetworkCli, tokens: string[], startIndex: number): TargetToken[] {
   const targets: TargetToken[] = [];
   let optionParsing = true;
   let tokenIndex = startIndex;
@@ -654,6 +689,11 @@ function extractCurlOrWgetTargetTokens(cli: SupportedBashNetworkCli, tokens: str
       continue;
     }
 
+    if (isHttpieMethodToken(cli, token)) {
+      tokenIndex += 1;
+      continue;
+    }
+
     appendUrlLikeTarget(targets, token, tokenIndex);
     tokenIndex += 1;
   }
@@ -661,39 +701,8 @@ function extractCurlOrWgetTargetTokens(cli: SupportedBashNetworkCli, tokens: str
   return targets;
 }
 
-function extractHttpieTargetTokens(cli: SupportedBashNetworkCli, tokens: string[], startIndex: number): TargetToken[] {
-  const targets: TargetToken[] = [];
-  let optionParsing = true;
-  let tokenIndex = startIndex;
-
-  while (tokenIndex < tokens.length) {
-    const token = tokens[tokenIndex] ?? "";
-
-    if (optionParsing && token === "--") {
-      optionParsing = false;
-      tokenIndex += 1;
-      continue;
-    }
-
-    if (optionParsing && token.startsWith("--")) {
-      tokenIndex += calculateTokenStep(tokenIndex, handleLongOption(cli, tokens, tokenIndex, targets));
-      continue;
-    }
-
-    if (optionParsing && isShortOptionToken(token)) {
-      tokenIndex += calculateTokenStep(tokenIndex, handleShortOption(cli, tokens, tokenIndex, targets));
-      continue;
-    }
-
-    if (HTTP_METHODS.has(token.toUpperCase())) {
-      tokenIndex += 1;
-      continue;
-    }
-    appendUrlLikeTarget(targets, token, tokenIndex);
-    tokenIndex += 1;
-  }
-
-  return targets;
+function isHttpieMethodToken(cli: SupportedBashNetworkCli, token: string): boolean {
+  return (cli === "http" || cli === "https") && HTTP_METHODS.has(token.toUpperCase());
 }
 
 function calculateTokenStep(currentTokenIndex: number, handledTokenIndex: number): number {
@@ -728,32 +737,17 @@ function parseLongOptionDetails(token: string): LongOptionDetails {
 }
 
 function readLongOptionValueHandling(cli: SupportedBashNetworkCli, optionName: string): OptionValueHandling | null {
-  if (cli === "curl") return readCurlLongOptionValueHandling(optionName);
-  if (cli === "wget") return readWgetLongOptionValueHandling(optionName);
+  if (cli === "curl") return readOptionValueHandling(optionName, CURL_LONG_OPTION_VALUE_RULES);
+  if (cli === "wget") return readOptionValueHandling(optionName, WGET_LONG_OPTION_VALUE_RULES);
 
-  return readHttpieLongOptionValueHandling(optionName);
+  return readOptionValueHandling(optionName, HTTPIE_LONG_OPTION_VALUE_RULES);
 }
 
-function readCurlLongOptionValueHandling(optionName: string): OptionValueHandling | null {
-  if (CURL_LONG_URL_VALUE_FLAGS.has(optionName)) return "url";
-  if (CURL_LONG_NETWORK_VALUE_FLAGS.has(optionName)) return "network";
-  if (CURL_LONG_UNSUPPORTED_VALUE_FLAGS.has(optionName)) return "unsupported";
-  if (CURL_LONG_VALUE_FLAGS.has(optionName)) return "plain";
-
-  return null;
-}
-
-function readWgetLongOptionValueHandling(optionName: string): OptionValueHandling | null {
-  if (WGET_LONG_NETWORK_VALUE_FLAGS.has(optionName)) return "network";
-  if (WGET_LONG_UNSUPPORTED_VALUE_FLAGS.has(optionName)) return "unsupported";
-  if (WGET_LONG_VALUE_FLAGS.has(optionName)) return "plain";
-
-  return null;
-}
-
-function readHttpieLongOptionValueHandling(optionName: string): OptionValueHandling | null {
-  if (HTTPIE_LONG_NETWORK_VALUE_FLAGS.has(optionName)) return "network";
-  if (HTTPIE_LONG_VALUE_FLAGS.has(optionName)) return "plain";
+function readOptionValueHandling(optionName: string, rules: OptionValueHandlingRules): OptionValueHandling | null {
+  if (rules.urlValueFlags?.has(optionName)) return "url";
+  if (rules.networkValueFlags?.has(optionName)) return "network";
+  if (rules.unsupportedValueFlags?.has(optionName)) return "unsupported";
+  if (rules.plainValueFlags?.has(optionName)) return "plain";
 
   return null;
 }
@@ -782,26 +776,10 @@ function handleShortOption(
 }
 
 function readShortOptionValueHandling(cli: SupportedBashNetworkCli, optionName: string): OptionValueHandling | null {
-  if (cli === "curl") return readCurlShortOptionValueHandling(optionName);
-  if (cli === "wget") return readWgetShortOptionValueHandling(optionName);
+  if (cli === "curl") return readOptionValueHandling(optionName, CURL_SHORT_OPTION_VALUE_RULES);
+  if (cli === "wget") return readOptionValueHandling(optionName, WGET_SHORT_OPTION_VALUE_RULES);
 
-  return HTTPIE_SHORT_VALUE_FLAGS.has(optionName) ? "plain" : null;
-}
-
-function readCurlShortOptionValueHandling(optionName: string): OptionValueHandling | null {
-  if (CURL_SHORT_NETWORK_VALUE_FLAGS.has(optionName)) return "network";
-  if (CURL_SHORT_UNSUPPORTED_VALUE_FLAGS.has(optionName)) return "unsupported";
-  if (CURL_SHORT_VALUE_FLAGS.has(optionName)) return "plain";
-
-  return null;
-}
-
-function readWgetShortOptionValueHandling(optionName: string): OptionValueHandling | null {
-  if (WGET_SHORT_NETWORK_VALUE_FLAGS.has(optionName)) return "network";
-  if (WGET_SHORT_UNSUPPORTED_VALUE_FLAGS.has(optionName)) return "unsupported";
-  if (WGET_SHORT_VALUE_FLAGS.has(optionName)) return "plain";
-
-  return null;
+  return readOptionValueHandling(optionName, HTTPIE_SHORT_OPTION_VALUE_RULES);
 }
 
 function handleOptionUrlValue(
