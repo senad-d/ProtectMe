@@ -21,7 +21,7 @@ import { buildBlockedAttemptLogEntry } from "../src/logging/blocked-attempt-log.
 const cwd = "/workspace/project";
 const homeDir = "/home/user";
 const agentDir = `${homeDir}/.pi/agent`;
-const starterStatusText = `🌐 (${DEFAULT_PROTECTME_ALLOW_LIST.length} sites)`;
+const starterStatusText = "🌐";
 const promptErrorNotification = [
   "ProtectMe blocked this repeated network request because the confirmation prompt failed.",
   "No config was changed; update the allow list manually before retrying.",
@@ -38,7 +38,7 @@ test("session start resets attempts, loads config, sets status, and shows warnin
 
   assert.equal(state.blockedHostAttempts.size, 0);
   assert.equal(fake.loadCalls, 1);
-  assert.deepEqual(ctx.ui.statusCalls, [{ key: "protectme", text: `🌐 (${DEFAULT_PROTECTME_ALLOW_LIST.length + 2} sites)` }]);
+  assert.deepEqual(ctx.ui.statusCalls, [{ key: "protectme", text: "🌐" }]);
   assert.deepEqual(ctx.ui.notifications, [
     {
       message: 'ProtectMe config warning: project allowList entry ignored ("bad host"): invalid host',
@@ -76,7 +76,7 @@ test("invalid config warns on session start and still fails closed on tool calls
     fake.dependencies,
   );
 
-  assert.equal(ctx.ui.statusCalls[0].text, "🌐 (0 sites)");
+  assert.equal(ctx.ui.statusCalls[0].text, "🌐");
   assert.equal(ctx.ui.notifications.length, 1);
   assert.match(ctx.ui.notifications[0].message, /global config invalid/u);
   assert.deepEqual(result, {
@@ -368,7 +368,7 @@ test("mixed-source invalid config fails closed in network guard despite permissi
       fake.dependencies,
     );
 
-    assert.equal(ctx.ui.statusCalls[0].text, "🌐 (0 sites)");
+    assert.equal(ctx.ui.statusCalls[0].text, "🌐");
     assert.match(ctx.ui.notifications[0].message, /Effective config failed closed/u);
     assert.deepEqual(result, {
       block: true,

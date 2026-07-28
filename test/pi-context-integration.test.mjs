@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DEFAULT_PROTECTME_ALLOW_LIST, mergeProtectMeConfigs } from "../src/config/index.ts";
+import { mergeProtectMeConfigs } from "../src/config/index.ts";
 import { PROTECTME_COMMAND_NAME } from "../src/constants.ts";
 import {
   createDefaultNetworkGuardDependencies,
@@ -15,7 +15,7 @@ import { registerProtectMeCommand } from "../src/ui/protectme-panel.ts";
 const cwd = "/workspace/project";
 const homeDir = "/home/user";
 const agentDir = `${homeDir}/.pi/agent`;
-const starterStatusText = `🌐 (${DEFAULT_PROTECTME_ALLOW_LIST.length} sites)`;
+const starterStatusText = "🌐";
 const plainTheme = {
   fg(_role, text) {
     return text;

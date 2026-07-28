@@ -2,6 +2,7 @@
 
 ## 0.1.0 - Unreleased
 
+- Simplified the TUI footer status to show only the globe icon, without the allow-list site count.
 - Added a manual npm publish workflow that reads the package version, validates package contents, publishes with provenance, and pushes a matching release tag.
 - Consolidated bash URL extractor option parsing to reduce Sonar-reported duplication.
 - Reworked bash target-token loop advancement to avoid unused assignment lint failures.

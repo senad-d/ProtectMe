@@ -14,7 +14,7 @@ export interface ProtectMeSessionStatusUI {
 export function buildProtectMeStatusText(config: ProtectMeConfigLoadResult): string {
   const projectConfigStatus = formatIgnoredProjectConfigStatus(config);
 
-  return `🌐 (${formatSiteCount(config.effective.allowList.length)})${projectConfigStatus}`;
+  return `🌐${projectConfigStatus}`;
 }
 
 export function buildProtectMeConfigWarningMessage(warnings: string[]): string | null {
@@ -68,12 +68,6 @@ function readProtectMeSessionStatusUI(value: unknown): ProtectMeSessionStatusUI 
   if (typeof value.setStatus !== "function") return null;
 
   return value as unknown as ProtectMeSessionStatusUI;
-}
-
-function formatSiteCount(count: number): string {
-  const label = count === 1 ? "site" : "sites";
-
-  return `${count} ${label}`;
 }
 
 function formatIgnoredProjectConfigStatus(config: ProtectMeConfigLoadResult): string {

@@ -467,8 +467,8 @@ function buildParsedConfigSource(source, path, config) {
   };
 }
 
-function siteStatus(configuredSiteCount) {
-  return `🌐 (${starterAllowListCount + configuredSiteCount} sites)`;
+function siteStatus() {
+  return "🌐";
 }
 
 async function flushPanelActions() {
