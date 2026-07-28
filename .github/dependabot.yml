@@ -13,6 +13,11 @@ updates:
     commit-message:
       prefix: deps
       include: scope
+    ignore:
+      # typescript-eslint 8.x supports TypeScript versions below 6.1 only.
+      - dependency-name: typescript
+        versions:
+          - ">=6.1.0"
     groups:
       npm-development-dependencies:
         dependency-type: development
