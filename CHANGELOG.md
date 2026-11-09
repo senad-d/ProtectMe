@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.6 - Unreleased
+
+- Bumped the package and lockfile version to 0.1.6.
+- Replaced backtracking-prone git worktree entry parsing with linear string operations.
+- Refactored bounded, newest-first blocked-host log reads into an async iterator that stops once enough hosts are found.
+- Fixed curl option values such as `--retry 2` being read as request hosts (`0.0.0.2`). Completed the curl, wget, and HTTPie value-flag tables from `curl --help all` and the wget and HTTPie manuals.
+- Fixed flags that take no value (`curl -O`, `wget --page-requisites`, `wget -h`, `http --form`, `http --chunked`, `http --multipart`, `http --headers`, `http -c`) hiding the URL after them from the guard.
+- A bare number in a target position now fails closed as an unsupported option, with an honest reason, instead of being read as an IPv4 shorthand host.
+- Project config and the blocked-attempt log now resolve to the main worktree when Pi runs inside a linked git worktree, so saved allow-list entries and the audit log outlive temporary worktrees.
+- The blocked-attempt log directory now gets a `.gitignore` for the log file when none exists, so `git add -A` does not commit it.
+- First-attempt block guidance now says that repeating the same request asks the user when a prompt UI exists, and says not to retry when it does not.
+- Documented that ProtectMe inspects only `curl`, `wget`, and HTTPie command lines and is not a network sandbox.
+
 ## 0.1.0 - Unreleased
 
 - Simplified the TUI footer status to show only the globe icon, without the allow-list site count.

@@ -146,7 +146,7 @@ interface BlockDecision {
   action: "block";
   outcome: BlockedAttemptLogOutcome;
   reason: string;
-  sendFirstAttemptGuidance?: boolean;
+  firstAttemptGuidance?: string;
 }
 
 type NetworkGuardDecision = AllowDecision | BlockDecision;
@@ -235,7 +235,7 @@ export async function handleNetworkGuardToolCall(
   if (decision.action === "allow") return undefined;
 
   await logBlockedRequest(toolCallEvent, ctx, config, disallowedRequest, dependencies, decision.outcome);
-  if (decision.sendFirstAttemptGuidance) sendFirstAttemptGuidance(disallowedRequest, dependencies);
+  if (decision.firstAttemptGuidance) dependencies.sendGuidance(decision.firstAttemptGuidance, { deliverAs: "steer" });
 
   return {
     block: true,
@@ -341,7 +341,7 @@ async function decideDisallowedRequest(
   dependencies: NetworkGuardDependencies,
 ): Promise<NetworkGuardDecision> {
   if (request.candidate.unsupportedReason) return buildUnsupportedNetworkOptionBlockDecision(request.candidate);
-  if (request.attempt === 1) return buildFirstAttemptBlockDecision(request.candidate.host);
+  if (request.attempt === 1) return buildFirstAttemptBlockDecision(request.candidate.host, hasPromptUI(ctx));
   if (!hasPromptUI(ctx)) return buildPromptUnavailableDecision(request.candidate.host);
 
   return promptForRepeatedBlockedRequest(ctx.ui, config, request, dependencies);
@@ -355,12 +355,12 @@ function buildUnsupportedNetworkOptionBlockDecision(candidate: BashNetworkReques
   };
 }
 
-function buildFirstAttemptBlockDecision(host: string): BlockDecision {
+function buildFirstAttemptBlockDecision(host: string, promptAvailable: boolean): BlockDecision {
   return {
     action: "block",
     outcome: "blocked",
-    reason: buildProtectMeBlockReason(host),
-    sendFirstAttemptGuidance: true,
+    reason: buildProtectMeBlockReason(host, promptAvailable),
+    firstAttemptGuidance: buildProtectMeFirstBlockGuidance(host, promptAvailable),
   };
 }
 
@@ -659,8 +659,4 @@ function toConfigSourceMetadata(configSource: ParsedProtectMeConfig): ProtectMeC
     status: configSource.status,
     message: configSource.message,
   };
-}
-
-function sendFirstAttemptGuidance(request: DisallowedRequest, dependencies: NetworkGuardDependencies): void {
-  dependencies.sendGuidance(buildProtectMeFirstBlockGuidance(request.candidate.host), { deliverAs: "steer" });
 }

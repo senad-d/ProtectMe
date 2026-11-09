@@ -62,7 +62,9 @@ const CURL_CONFIG_UNSUPPORTED_REASON = "curl config files can contain additional
 const WGET_CONFIG_UNSUPPORTED_REASON = "wget config files can contain additional URLs or network options that ProtectMe cannot inspect safely.";
 const WGET_INPUT_FILE_UNSUPPORTED_REASON = "wget input files can contain additional URLs that ProtectMe cannot inspect safely.";
 const STATIC_NETWORK_OPTION_UNSUPPORTED_REASON = "Network option value could not be statically parsed safely.";
-const CURL_LONG_URL_VALUE_FLAGS = new Set(["--doh-url", "--url"]);
+const BARE_NUMBER_TARGET_UNSUPPORTED_REASON =
+  "a bare number may be the value of an option ProtectMe does not recognize, so the real request host cannot be determined.";
+const CURL_LONG_URL_VALUE_FLAGS = new Set(["--doh-url", "--ipfs-gateway", "--url"]);
 const CURL_LONG_NETWORK_VALUE_FLAGS = new Set([
   "--connect-to",
   "--dns-servers",
@@ -77,36 +79,136 @@ const CURL_LONG_NETWORK_VALUE_FLAGS = new Set([
 const CURL_LONG_UNSUPPORTED_VALUE_FLAGS = new Map([["--config", CURL_CONFIG_UNSUPPORTED_REASON]]);
 const CURL_LONG_VALUE_FLAGS = new Set([
   "--abstract-unix-socket",
+  "--alt-svc",
   "--aws-sigv4",
   "--cacert",
   "--capath",
   "--cert",
+  "--cert-type",
+  "--ciphers",
   "--connect-timeout",
+  "--continue-at",
   "--cookie",
   "--cookie-jar",
+  "--create-file-mode",
+  "--crlfile",
+  "--curves",
   "--data",
   "--data-ascii",
   "--data-binary",
   "--data-raw",
   "--data-urlencode",
+  "--delegation",
   "--dns-interface",
   "--dns-ipv4-addr",
   "--dns-ipv6-addr",
+  "--dump-header",
+  "--ech",
+  "--egd-file",
+  "--engine",
+  "--etag-compare",
+  "--etag-save",
+  "--expect100-timeout",
   "--form",
   "--form-string",
+  "--ftp-account",
+  "--ftp-alternative-to-user",
+  "--ftp-method",
+  "--ftp-port",
+  "--ftp-ssl-ccc-mode",
+  "--happy-eyeballs-timeout-ms",
+  "--haproxy-clientip",
   "--header",
+  "--help",
   "--hostpubmd5",
+  "--hostpubsha256",
+  "--hsts",
   "--interface",
+  "--ip-tos",
+  "--json",
+  "--keepalive-cnt",
+  "--keepalive-time",
   "--key",
+  "--key-type",
+  "--knownhosts",
+  "--krb",
+  "--libcurl",
   "--limit-rate",
+  "--local-port",
+  "--login-options",
+  "--mail-auth",
+  "--mail-from",
+  "--mail-rcpt",
+  "--max-filesize",
+  "--max-redirs",
   "--max-time",
+  "--netrc-file",
+  "--noproxy",
+  "--oauth2-bearer",
   "--output",
+  "--output-dir",
+  "--parallel-max",
+  "--pass",
+  "--pinnedpubkey",
+  "--proto",
+  "--proto-default",
+  "--proto-redir",
+  "--proxy-cacert",
+  "--proxy-capath",
+  "--proxy-cert",
+  "--proxy-cert-type",
+  "--proxy-ciphers",
+  "--proxy-crlfile",
   "--proxy-header",
+  "--proxy-key",
+  "--proxy-key-type",
+  "--proxy-pass",
+  "--proxy-pinnedpubkey",
+  "--proxy-service-name",
+  "--proxy-tls13-ciphers",
+  "--proxy-tlsauthtype",
+  "--proxy-tlspassword",
+  "--proxy-tlsuser",
+  "--proxy-user",
+  "--pubkey",
+  "--quote",
+  "--random-file",
+  "--range",
+  "--rate",
   "--referer",
   "--request",
+  "--request-target",
+  "--retry",
+  "--retry-delay",
+  "--retry-max-time",
+  "--sasl-authzid",
+  "--service-name",
+  "--sigalgs",
+  "--socks5-gssapi-service",
+  "--speed-limit",
+  "--speed-time",
+  "--ssl-sessions",
+  "--stderr",
+  "--telnet-option",
+  "--tftp-blksize",
+  "--time-cond",
+  "--tls-max",
+  "--tls13-ciphers",
+  "--tlsauthtype",
+  "--tlspassword",
+  "--tlsuser",
+  "--trace",
+  "--trace-ascii",
+  "--trace-config",
   "--unix-socket",
+  "--upload-file",
+  "--upload-flags",
+  "--url-query",
   "--user",
   "--user-agent",
+  "--variable",
+  "--vlan-priority",
+  "--write-out",
 ]);
 const WGET_LONG_NETWORK_VALUE_FLAGS = new Set(["--execute"]);
 const WGET_LONG_UNSUPPORTED_VALUE_FLAGS = new Map([
@@ -114,48 +216,113 @@ const WGET_LONG_UNSUPPORTED_VALUE_FLAGS = new Map([
   ["--input-file", WGET_INPUT_FILE_UNSUPPORTED_REASON],
 ]);
 const WGET_LONG_VALUE_FLAGS = new Set([
+  "--accept",
+  "--accept-regex",
+  "--append-output",
+  "--base",
+  "--bind-address",
   "--body-data",
   "--body-file",
   "--ca-certificate",
+  "--ca-directory",
   "--certificate",
+  "--certificate-type",
+  "--ciphers",
+  "--compression",
+  "--connect-timeout",
+  "--crl-file",
+  "--cut-dirs",
+  "--default-page",
   "--directory-prefix",
+  "--dns-timeout",
+  "--domains",
+  "--egd-file",
+  "--exclude-directories",
+  "--exclude-domains",
+  "--ftp-password",
+  "--ftp-user",
   "--header",
+  "--hsts-file",
+  "--http-password",
+  "--http-user",
+  "--include-directories",
+  "--level",
+  "--limit-rate",
   "--load-cookies",
+  "--local-encoding",
   "--method",
   "--output-document",
-  "--page-requisites",
+  "--output-file",
+  "--password",
+  "--pinnedpubkey",
   "--post-data",
   "--post-file",
+  "--prefer-family",
+  "--private-key",
+  "--private-key-type",
+  "--progress",
+  "--proxy-password",
+  "--proxy-user",
+  "--quota",
+  "--random-file",
+  "--read-timeout",
   "--referer",
+  "--reject",
+  "--reject-regex",
+  "--rejected-log",
+  "--remote-encoding",
+  "--report-speed",
+  "--restrict-file-names",
+  "--retry-on-http-error",
   "--save-cookies",
+  "--secure-protocol",
+  "--timeout",
+  "--tries",
+  "--use-askpass",
+  "--user",
   "--user-agent",
+  "--wait",
+  "--waitretry",
+  "--warc-dedup",
+  "--warc-file",
+  "--warc-header",
+  "--warc-max-size",
+  "--warc-tempdir",
 ]);
 const HTTPIE_LONG_NETWORK_VALUE_FLAGS = new Set(["--proxy"]);
 const HTTPIE_LONG_VALUE_FLAGS = new Set([
   "--auth",
+  "--auth-type",
+  "--boundary",
   "--cert",
   "--cert-key",
-  "--chunked",
-  "--download-resume",
-  "--form",
-  "--headers",
-  "--multipart",
+  "--cert-key-pass",
+  "--ciphers",
+  "--default-scheme",
+  "--format-options",
+  "--history-print",
+  "--max-headers",
+  "--max-redirects",
   "--output",
   "--pretty",
   "--print",
+  "--raw",
+  "--response-charset",
+  "--response-mime",
   "--session",
   "--session-read-only",
+  "--ssl",
   "--style",
   "--timeout",
   "--verify",
 ]);
 const CURL_SHORT_NETWORK_VALUE_FLAGS = new Set(["x"]);
 const CURL_SHORT_UNSUPPORTED_VALUE_FLAGS = new Map([["K", CURL_CONFIG_UNSUPPORTED_REASON]]);
-const CURL_SHORT_VALUE_FLAGS = new Set(["A", "b", "c", "d", "e", "F", "H", "m", "o", "O", "u", "X", "y", "z"]);
+const CURL_SHORT_VALUE_FLAGS = new Set(["A", "b", "c", "C", "d", "D", "e", "E", "F", "H", "m", "o", "P", "Q", "r", "t", "T", "u", "U", "w", "X", "y", "Y", "z"]);
 const WGET_SHORT_NETWORK_VALUE_FLAGS = new Set(["e"]);
 const WGET_SHORT_UNSUPPORTED_VALUE_FLAGS = new Map([["i", WGET_INPUT_FILE_UNSUPPORTED_REASON]]);
-const WGET_SHORT_VALUE_FLAGS = new Set(["A", "D", "h", "O", "P", "Q", "T", "U"]);
-const HTTPIE_SHORT_VALUE_FLAGS = new Set(["a", "A", "c", "o", "p", "s"]);
+const WGET_SHORT_VALUE_FLAGS = new Set(["a", "A", "B", "D", "I", "l", "o", "O", "P", "Q", "R", "t", "T", "U", "w", "X"]);
+const HTTPIE_SHORT_VALUE_FLAGS = new Set(["a", "A", "o", "p", "P", "s"]);
 const CURL_LONG_OPTION_VALUE_RULES: OptionValueHandlingRules = {
   networkValueFlags: CURL_LONG_NETWORK_VALUE_FLAGS,
   plainValueFlags: CURL_LONG_VALUE_FLAGS,
@@ -694,7 +861,7 @@ function extractTargetTokens(cli: SupportedBashNetworkCli, tokens: string[], sta
       continue;
     }
 
-    appendUrlLikeTarget(targets, token, tokenIndex);
+    appendRequestTarget(targets, token, tokenIndex);
     tokenIndex += 1;
   }
 
@@ -789,12 +956,12 @@ function handleOptionUrlValue(
   inlineValue: string | null,
 ): number {
   if (inlineValue !== null) {
-    appendUrlLikeTarget(targets, inlineValue, tokenIndex);
+    appendRequestTarget(targets, inlineValue, tokenIndex);
     return tokenIndex;
   }
 
   const nextToken = tokens[tokenIndex + 1];
-  if (nextToken) appendUrlLikeTarget(targets, nextToken, tokenIndex + 1);
+  if (nextToken) appendRequestTarget(targets, nextToken, tokenIndex + 1);
 
   return tokenIndex + 1;
 }
@@ -998,6 +1165,22 @@ function appendUrlLikeTarget(targets: TargetToken[], token: string, tokenIndex: 
   targets.push({ token, tokenIndex });
 }
 
+function appendRequestTarget(targets: TargetToken[], token: string, tokenIndex: number): void {
+  if (isBareNumberHostToken(token)) {
+    appendUnsupportedTarget(targets, token, tokenIndex, BARE_NUMBER_TARGET_UNSUPPORTED_REASON);
+    return;
+  }
+
+  appendUrlLikeTarget(targets, token, tokenIndex);
+}
+
+function isBareNumberHostToken(token: string): boolean {
+  const trimmedToken = token.trim();
+  if (/[.:]/u.test(trimmedToken) || hasUrlScheme(trimmedToken)) return false;
+
+  return normalizeHostInput(trimmedToken).kind === "ip";
+}
+
 function isUrlLikeRequestTargetToken(token: string): boolean {
   const trimmedToken = token.trim();
   if (trimmedToken.length === 0) return false;
@@ -1005,6 +1188,7 @@ function isUrlLikeRequestTargetToken(token: string): boolean {
   if (/[`$]/u.test(trimmedToken)) return false;
   if (hasAssignmentPrefix(trimmedToken)) return false;
   if (hasUrlScheme(trimmedToken)) return normalizeHostInput(trimmedToken).host !== null;
+  if (isBareNumberHostToken(trimmedToken)) return false;
 
   const normalizedHost = normalizeHostInput(trimmedToken);
   if (!normalizedHost.host || !normalizedHost.kind) return false;

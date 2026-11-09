@@ -82,7 +82,7 @@ test("invalid config warns on session start and still fails closed on tool calls
   assert.deepEqual(result, {
     block: true,
     reason:
-      'ProtectMe blocked network request to example.com. mode: "block" allows only configured hosts. Do not retry blindly; continue with local or already allowed work, or ask the user if access is required.',
+      'ProtectMe blocked network request to example.com. mode: "block" allows only configured hosts. If this host is required, repeat the same request once: ProtectMe will then ask the user to allow it or keep it blocked. Otherwise continue with local or already allowed work.',
   });
   assert.equal(fake.loggedAttempts.length, 1);
   assert.equal(fake.loggedAttempts[0].outcome, "blocked");
@@ -103,7 +103,7 @@ test("first disallowed bash request blocks, logs once, and queues safe guidance"
   assert.deepEqual(result, {
     block: true,
     reason:
-      'ProtectMe blocked network request to example.com. mode: "block" allows only configured hosts. Do not retry blindly; continue with local or already allowed work, or ask the user if access is required.',
+      'ProtectMe blocked network request to example.com. mode: "block" allows only configured hosts. This session has no UI to ask the user, so repeating the request will not help. Continue with local or already allowed work, or ask the user to add the host to the allow list.',
   });
   assert.equal(ctx.abortCalled, false);
   assert.equal(fake.loggedAttempts.length, 1);
@@ -112,7 +112,7 @@ test("first disallowed bash request blocks, logs once, and queues safe guidance"
   assert.equal(fake.loggedAttempts[0].outcome, "blocked");
   assert.equal(fake.loggedAttempts[0].command, "curl https://example.com");
   assert.equal(fake.guidanceMessages.length, 1);
-  assert.match(fake.guidanceMessages[0].message, /Do not retry blindly/u);
+  assert.match(fake.guidanceMessages[0].message, /cannot ask the user, so do not retry/u);
   assert.match(fake.guidanceMessages[0].message, /Continue with local or already allowed work/u);
   assert.deepEqual(fake.guidanceMessages[0].options, { deliverAs: "steer" });
 });
@@ -127,7 +127,7 @@ test("first disallowed user bash command blocks with a bash result and no guidan
   assert.deepEqual(result, {
     result: {
       output:
-        'ProtectMe blocked network request to example.com. mode: "block" allows only configured hosts. Do not retry blindly; continue with local or already allowed work, or ask the user if access is required.\n',
+        'ProtectMe blocked network request to example.com. mode: "block" allows only configured hosts. This session has no UI to ask the user, so repeating the request will not help. Continue with local or already allowed work, or ask the user to add the host to the allow list.\n',
       exitCode: 1,
       cancelled: false,
       truncated: false,
@@ -140,6 +140,27 @@ test("first disallowed user bash command blocks with a bash result and no guidan
   assert.equal(fake.loggedAttempts[0].attempt, 1);
   assert.equal(fake.loggedAttempts[0].outcome, "blocked");
   assert.equal(fake.guidanceMessages.length, 0);
+});
+
+test("first-attempt guidance with a prompt UI says a repeat asks the user, and the repeat opens the dialog", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult());
+  const ctx = createFakeContext({ hasUI: true, selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.keepBlocked] });
+  const event = { toolName: "bash", input: { command: "curl https://sh.rustup.rs" } };
+
+  const firstResult = await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
+
+  assert.match(firstResult.reason, /repeat the same request once: ProtectMe will then ask the user/u);
+  assert.doesNotMatch(firstResult.reason, /Do not retry/u);
+  assert.equal(fake.guidanceMessages.length, 1);
+  assert.match(fake.guidanceMessages[0].message, /repeat the same request once so ProtectMe can ask the user/u);
+  assert.equal(ctx.ui.selectCalls.length, 0);
+
+  const secondResult = await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
+
+  assert.equal(secondResult.block, true);
+  assert.equal(ctx.ui.selectCalls.length, 1);
+  assert.match(ctx.ui.selectCalls[0].title, /Attempt: 2/u);
 });
 
 test("repeated user bash command can be allowed once through the shared prompt", async () => {
@@ -204,7 +225,7 @@ test("default first-attempt guidance uses a custom message instead of a follow-u
   assert.equal(result?.block, true);
   assert.equal(fakePi.userMessages.length, 0);
   assert.equal(fakePi.messages.length, 1);
-  assert.match(fakePi.messages[0].message.content, /Do not retry blindly/u);
+  assert.match(fakePi.messages[0].message.content, /cannot ask the user, so do not retry/u);
   assert.equal(fakePi.messages[0].message.customType, PROTECTME_GUIDANCE_CUSTOM_MESSAGE_TYPE);
   assert.equal(fakePi.messages[0].message.display, false);
   assert.deepEqual(fakePi.messages[0].message.details, { source: "network_guard" });
@@ -241,7 +262,7 @@ test("wrapped bash requests are still detected and blocked", async () => {
   assert.deepEqual(result, {
     block: true,
     reason:
-      'ProtectMe blocked network request to wrapped.example.com. mode: "block" allows only configured hosts. Do not retry blindly; continue with local or already allowed work, or ask the user if access is required.',
+      'ProtectMe blocked network request to wrapped.example.com. mode: "block" allows only configured hosts. This session has no UI to ask the user, so repeating the request will not help. Continue with local or already allowed work, or ask the user to add the host to the allow list.',
   });
   assert.equal(fake.loggedAttempts.length, 1);
   assert.equal(fake.loggedAttempts[0].host, "wrapped.example.com");
@@ -261,7 +282,7 @@ test("network-affecting option values must also be allowed", async () => {
   assert.deepEqual(result, {
     block: true,
     reason:
-      'ProtectMe blocked network request to proxy.example.com. mode: "block" allows only configured hosts. Do not retry blindly; continue with local or already allowed work, or ask the user if access is required.',
+      'ProtectMe blocked network request to proxy.example.com. mode: "block" allows only configured hosts. This session has no UI to ask the user, so repeating the request will not help. Continue with local or already allowed work, or ask the user to add the host to the allow list.',
   });
   assert.equal(fake.loggedAttempts.length, 1);
   assert.equal(fake.loggedAttempts[0].rawUrl, "http://proxy.example.com:8080");
@@ -373,7 +394,7 @@ test("mixed-source invalid config fails closed in network guard despite permissi
     assert.deepEqual(result, {
       block: true,
       reason:
-        'ProtectMe blocked network request to permissive.example.com. mode: "block" allows only configured hosts. Do not retry blindly; continue with local or already allowed work, or ask the user if access is required.',
+        'ProtectMe blocked network request to permissive.example.com. mode: "block" allows only configured hosts. If this host is required, repeat the same request once: ProtectMe will then ask the user to allow it or keep it blocked. Otherwise continue with local or already allowed work.',
     });
     assert.equal(fake.loggedAttempts.length, 1);
     assert.equal(fake.loggedAttempts[0].outcome, "blocked");
@@ -402,7 +423,7 @@ test("untrusted project config is visible as ignored and does not disable blocki
   assert.deepEqual(result, {
     block: true,
     reason:
-      'ProtectMe blocked network request to project-only.example.com. mode: "block" allows only configured hosts. Do not retry blindly; continue with local or already allowed work, or ask the user if access is required.',
+      'ProtectMe blocked network request to project-only.example.com. mode: "block" allows only configured hosts. If this host is required, repeat the same request once: ProtectMe will then ask the user to allow it or keep it blocked. Otherwise continue with local or already allowed work.',
   });
   assert.equal(fake.loggedAttempts.length, 1);
 });

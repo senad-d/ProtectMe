@@ -151,6 +151,51 @@ test("recent blocked-host reads use a bounded tail window for large logs", async
   assert.equal(hosts.some((host) => host.startsWith("old-")), false);
 });
 
+test("recent blocked-host reads preserve the first record and unterminated last record across tiny chunks", async () => {
+  const paths = createCasePaths("recent-tiny-chunks");
+  const text = [
+    JSON.stringify({ host: "first.example.com" }),
+    JSON.stringify({ host: "last.example.com" }),
+  ].join("\n");
+
+  await mkdir(dirname(paths.blockedAttemptLogPath), { recursive: true });
+  await writeFile(paths.blockedAttemptLogPath, text, "utf8");
+
+  assert.deepEqual(await readRecentBlockedHosts(paths.blockedAttemptLogPath, 5, {
+    chunkBytes: 1,
+    maxScanBytes: Buffer.byteLength(text),
+  }), ["last.example.com", "first.example.com"]);
+  assert.deepEqual(await readRecentBlockedHosts(paths.blockedAttemptLogPath, 1, {
+    chunkBytes: 1,
+  }), ["last.example.com"]);
+});
+
+test("recent blocked-host reads discard an incomplete record at the scan boundary", async () => {
+  const paths = createCasePaths("recent-partial-boundary");
+  const oldest = `${JSON.stringify({ host: "oldest.example.com" })}\n`;
+  const newest = `${JSON.stringify({ host: "newest.example.com" })}\n`;
+
+  await mkdir(dirname(paths.blockedAttemptLogPath), { recursive: true });
+  await writeFile(paths.blockedAttemptLogPath, oldest + newest, "utf8");
+
+  assert.deepEqual(await readRecentBlockedHosts(paths.blockedAttemptLogPath, 5, {
+    chunkBytes: 7,
+    maxScanBytes: Buffer.byteLength(newest) + 5,
+  }), ["newest.example.com"]);
+});
+
+test("recent blocked-host reads handle empty or missing logs and a zero host limit", async () => {
+  const paths = createCasePaths("recent-empty");
+  assert.deepEqual(await readRecentBlockedHosts(paths.blockedAttemptLogPath), []);
+
+  await mkdir(dirname(paths.blockedAttemptLogPath), { recursive: true });
+  await writeFile(paths.blockedAttemptLogPath, "", "utf8");
+  assert.deepEqual(await readRecentBlockedHosts(paths.blockedAttemptLogPath), []);
+
+  await writeFile(paths.blockedAttemptLogPath, `${JSON.stringify({ host: "example.com" })}\n`, "utf8");
+  assert.deepEqual(await readRecentBlockedHosts(paths.blockedAttemptLogPath, 0), []);
+});
+
 test("blocked-attempt log retention policy is explicit and documentation-only", async () => {
   const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
 

@@ -37,6 +37,7 @@ export {
   resolveDefaultAgentDir,
   resolveGlobalConfigPath,
   resolveProjectConfigPath,
+  resolveProjectRoot,
   resolveProtectMeConfigPaths,
 } from "./config-paths.ts";
 export {

@@ -1,5 +1,5 @@
-import { appendFile, mkdir, open, type FileHandle } from "node:fs/promises";
-import { dirname } from "node:path";
+import { appendFile, mkdir, open, writeFile, type FileHandle } from "node:fs/promises";
+import { basename, dirname, resolve } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -132,9 +132,18 @@ export async function appendBlockedAttemptLog(input: AppendBlockedAttemptLogInpu
   const entry = buildBlockedAttemptLogEntry(input);
 
   await mkdir(dirname(input.logPath), { recursive: true });
+  await ensureBlockedAttemptLogGitIgnore(input.logPath);
   await appendFile(input.logPath, `${JSON.stringify(entry)}\n`, "utf8");
 
   return entry;
+}
+
+async function ensureBlockedAttemptLogGitIgnore(logPath: string): Promise<void> {
+  try {
+    await writeFile(resolve(dirname(logPath), ".gitignore"), `${basename(logPath)}\n`, { encoding: "utf8", flag: "wx" });
+  } catch {
+    // An existing .gitignore is left untouched, and a failed write must not block audit logging.
+  }
 }
 
 export async function appendProtectMeRequestAttemptLog(
@@ -230,33 +239,32 @@ async function readRecentBlockedHostsFromHandle(
   const seenHosts = new Set<string>();
   const stats = await handle.stat();
   let carry = "";
-  let offset = stats.size;
-  let scannedBytes = 0;
 
-  while (offset > 0 && scannedBytes < maxScanBytes && hosts.length < limit) {
-    const bytesToRead = Math.min(chunkBytes, offset, maxScanBytes - scannedBytes);
-    offset -= bytesToRead;
-    scannedBytes += bytesToRead;
-    carry = await readRecentBlockedHostChunk(handle, offset, bytesToRead, carry, hosts, seenHosts, limit);
+  for await (const chunkText of readTextChunksFromEnd(handle, stats.size, maxScanBytes, chunkBytes)) {
+    carry = collectRecentBlockedHostsFromChunk(chunkText, carry, hosts, seenHosts, limit);
+    if (hosts.length >= limit) return hosts;
   }
 
-  if (offset === 0) addRecentBlockedHostFromLine(carry, hosts, seenHosts, limit);
+  if (stats.size <= maxScanBytes) addRecentBlockedHostFromLine(carry, hosts, seenHosts, limit);
 
   return hosts;
 }
 
-async function readRecentBlockedHostChunk(
+async function* readTextChunksFromEnd(
   handle: FileHandle,
-  offset: number,
-  bytesToRead: number,
-  carry: string,
-  hosts: string[],
-  seenHosts: Set<string>,
-  limit: number,
-): Promise<string> {
-  const chunkText = await readTextChunk(handle, offset, bytesToRead);
+  size: number,
+  maxScanBytes: number,
+  chunkBytes: number,
+): AsyncGenerator<string> {
+  const firstOffset = Math.max(0, size - maxScanBytes);
+  let offset = size;
 
-  return collectRecentBlockedHostsFromChunk(chunkText, carry, hosts, seenHosts, limit);
+  while (offset > firstOffset) {
+    const bytesToRead = Math.min(chunkBytes, offset - firstOffset);
+    offset -= bytesToRead;
+    // Async generators await yielded promises; the consumer can stop before another read starts.
+    yield readTextChunk(handle, offset, bytesToRead);
+  }
 }
 
 async function readTextChunk(handle: FileHandle, offset: number, bytesToRead: number): Promise<string> {

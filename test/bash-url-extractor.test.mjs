@@ -247,6 +247,46 @@ test("tokenizer respects quotes and segment splitting respects quoted separators
   ]);
 });
 
+test("curl and wget option values are never parsed as request hosts", () => {
+  assert.deepEqual(candidateSummary("curl --fail --location --retry 2 https://sh.rustup.rs -o $TMPDIR/rustup-init.sh"), [
+    { cli: "curl", rawTarget: "https://sh.rustup.rs", host: "sh.rustup.rs", segmentIndex: 0 },
+  ]);
+  assert.deepEqual(candidateSummary("curl -C - -r 0-99 -w '%{http_code}' --max-redirs 3 https://example.com"), [
+    { cli: "curl", rawTarget: "https://example.com", host: "example.com", segmentIndex: 0 },
+  ]);
+  assert.deepEqual(candidateSummary("wget -t 3 -w 1 --tries 2 --timeout 5 https://example.com"), [
+    { cli: "wget", rawTarget: "https://example.com", host: "example.com", segmentIndex: 0 },
+  ]);
+});
+
+test("unknown option followed by a bare number blocks as unsupported instead of an IPv4 shorthand host", () => {
+  const candidates = extractBashNetworkRequestCandidates("curl --future-flag 2 https://example.com");
+
+  assert.equal(candidates.length, 2);
+  assert.equal(candidates[0].rawTarget, "2");
+  assert.equal(candidates[0].host, "unsupported static network option");
+  assert.match(candidates[0].unsupportedReason, /bare number/u);
+  assert.equal(candidates[1].host, "example.com");
+  assert.equal(candidates.some((candidate) => candidate.host === "0.0.0.2"), false);
+});
+
+test("flags without values do not hide the following URL", () => {
+  for (const command of [
+    "curl -O https://example.com/file",
+    "wget --page-requisites https://example.com",
+    "wget -h https://example.com",
+    "http --form https://example.com a=b",
+    "http --chunked https://example.com",
+    "http -c https://example.com",
+  ]) {
+    assert.deepEqual(
+      extractBashNetworkRequestCandidates(command).map((candidate) => candidate.host),
+      ["example.com"],
+      command,
+    );
+  }
+});
+
 function candidateSummary(command) {
   return extractBashNetworkRequestCandidates(command).map(toSummary);
 }

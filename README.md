@@ -108,8 +108,8 @@ ProtectMe reads JSON config from global and project-local files. It does not req
 | Scope | Path | Notes |
 | --- | --- | --- |
 | Global | `~/.pi/agent/protectme.json` | Applies across projects. `PI_CODING_AGENT_DIR` moves this path in standard Pi installations. |
-| Project | `.pi/protectme.json` | Applies only when Pi reports the project as trusted. |
-| Block log | `.pi/agent/protectme_log.jsonl` | Append-only local log for blocked attempts. Allowed requests are not logged. |
+| Project | `.pi/protectme.json` | Applies only when Pi reports the project as trusted. Inside a linked git worktree, this path resolves to the main worktree, so saved entries outlive the worktree. |
+| Block log | `.pi/agent/protectme_log.jsonl` | Append-only local log for blocked attempts. Allowed requests are not logged. Resolves to the main worktree like project config, and ProtectMe writes a `.gitignore` next to it when none exists. |
 
 Schema:
 
@@ -187,7 +187,13 @@ Guarded request CLIs:
 - `http`
 - `https`
 
-ProtectMe also inspects approved non-network wrappers such as `sudo`, `env`, `time`, `timeout`, and `nice` when they launch a supported request CLI. URL-bearing proxy and resolver options are treated as additional destinations. Static option sources that can hide destinations, such as `curl --config` or `wget --input-file`, fail closed.
+ProtectMe also inspects approved non-network wrappers such as `sudo`, `env`, `time`, `timeout`, and `nice` when they launch a supported request CLI. URL-bearing proxy and resolver options are treated as additional destinations. Static option sources that can hide destinations, such as `curl --config` or `wget --input-file`, fail closed. A bare number in a target position, such as the value of an option ProtectMe does not know, also fails closed instead of being read as an IPv4 shorthand host.
+
+What ProtectMe cannot see:
+
+- ProtectMe inspects only the command line of the guarded CLIs above. It is not a network sandbox.
+- Network access made by other programs is not checked. Examples: `rustup-init` downloading a toolchain, `cargo` fetching crates, `npm install`, `pip install`, `git clone`, scripts in any language, and anything a downloaded installer does after it starts.
+- Use OS or container network controls when you need every outbound connection enforced.
 
 Suggested workflow:
 
