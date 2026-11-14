@@ -31,6 +31,7 @@ export {
   normalizeAllowListEntries,
 } from "./host-matcher.ts";
 export { suggestCleanAllowListEntry } from "./prompt-suggestion.ts";
+export { isReadOnlyRequest } from "./read-only-request.ts";
 export type { BashNetworkRequestCandidate, SupportedBashNetworkCli } from "./bash-url-extractor.ts";
 export type {
   HostNormalizationResult,

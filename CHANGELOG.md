@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.7 - Unreleased
+
+- Bumped the package and lockfile version to 0.1.7.
+- Replaced repeated session-read mode unions with a shared type alias to address Sonar maintainability guidance.
+
+Session reads, for a host that runs a research session (Mission my-shop 2026-11-14: 41 "Allow once" prompts while a researcher fetched public pages from 30 hosts).
+
+- `PROTECTME_SESSION_READS=ask` adds the choice "Allow reads from the listed hosts for this session" to the repeated-attempt prompt of a read-only request. The prompt lists every read-only host of the command that is not on the allow list; the choice allows read-only requests to them until the session ends and writes no config.
+- `PROTECTME_SESSION_READS=open` lets read-only `curl` and `wget` requests through without a block or a prompt.
+- Read-only means no body, form, upload or method option (`-d`, `--data*`, `-F`, `--form*`, `-T`, `--upload-file`, `-X`, `--request`, `--json`, `--post-*`, `--method`, `--body-*`). Anything else, HTTPie included, keeps the per-host prompt in both modes, and so do the user's own bash commands.
+- Unset or any other value: no change.
+
 ## 0.1.6 - Unreleased
 
 - Bumped the package and lockfile version to 0.1.6.

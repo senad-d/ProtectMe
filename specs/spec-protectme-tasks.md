@@ -53,3 +53,29 @@ Replace backtracking-prone git-entry parsing with string operations and expose b
 - `npm run validate`: passed, including 139 tests and package-content checks.
 - `npm run test:coverage`: passed and generated `coverage/lcov.info`.
 - Sonar analysis for 0.1.6: quality gate passed, 98.0% coverage, no active issues, vulnerabilities, or security hotspots.
+
+### 3. Validate the 0.1.7 patch release and fix Sonar findings
+
+- [x] Bump the package and lockfile to 0.1.7, run validation and coverage, and resolve active Sonar findings.
+
+#### Why
+The pending session-read changes need a matching version and fresh release validation.
+
+#### How
+Run the full validation suite and coverage tests, submit a Sonar scan, replace the repeated session-read mode union with a shared alias, and scan again.
+
+#### Where
+- `package.json`
+- `package-lock.json`
+- `src/events/network-guard.ts`
+- `CHANGELOG.md`
+
+#### Acceptance criteria
+- Package and lockfile versions are 0.1.7, with updated changelog notes.
+- Local validation, package checks, and all 142 tests pass.
+- Fresh Sonar analysis passes the quality gate with no active issues.
+
+#### Validation
+- `npm run validate`: passed, including lint, typecheck, formatting, 142 tests, and package-content checks.
+- `npm run test:coverage`: passed and generated `coverage/lcov.info`.
+- Sonar analysis for 0.1.7: quality gate passed, 98.0% coverage, no active issues, vulnerabilities, or security hotspots.

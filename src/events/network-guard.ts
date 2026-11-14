@@ -35,6 +35,7 @@ import {
   buildProtectMeUnsupportedNetworkOptionBlockReason,
   extractBashNetworkRequestCandidates,
   extractToolCallNetworkRequestCandidates,
+  isReadOnlyRequest,
   matchAllowedHost,
   suggestCleanAllowListEntry,
   type BashNetworkRequestCandidate,
@@ -58,6 +59,12 @@ export const PROTECTME_SECOND_ATTEMPT_CHOICES = {
   keepBlocked: "Keep blocked",
 } as const;
 
+// Session reads (PROTECTME_SESSION_READS): a host that runs research sets it for that
+// session. "ask" adds this choice to the prompt of a read-only request; "open" lets
+// read-only requests through unasked. A request that sends data keeps the normal prompt.
+export const PROTECTME_SESSION_READS_ENV = "PROTECTME_SESSION_READS";
+export const PROTECTME_SESSION_READS_CHOICE = "Allow reads from the listed hosts for this session";
+
 export const PROTECTME_CONFIG_CONFIRM_CHOICES = {
   saveProjectAndAllow: "Save to project config and allow this call",
   saveGlobalAndAllow: "Save to global config and allow this call",
@@ -75,6 +82,8 @@ const PROTECTME_PROMPT_ERROR_NOTIFICATION = [
 
 export interface NetworkGuardState {
   blockedHostAttempts: Map<string, number>;
+  // Hosts the user allowed read-only requests to for this session (session reads "ask").
+  sessionReadHosts: Set<string>;
 }
 
 export interface NetworkGuardGuidanceOptions {
@@ -95,6 +104,8 @@ export interface NetworkGuardDependencies {
     mutation: ProtectMeConfigMutation,
   ): Promise<ProtectMeConfigFile>;
   sendGuidance(message: string, options?: NetworkGuardGuidanceOptions): void;
+  // The session-reads mode; defaults to the PROTECTME_SESSION_READS environment variable.
+  getSessionReads?(): string | undefined;
 }
 
 export interface ToolCallBlockResult {
@@ -151,15 +162,49 @@ interface BlockDecision {
 
 type NetworkGuardDecision = AllowDecision | BlockDecision;
 type ConfigPromptTarget = "project" | "global";
+type SessionReadsMode = "ask" | "open" | undefined;
 
 export function createNetworkGuardState(): NetworkGuardState {
   return {
     blockedHostAttempts: new Map(),
+    sessionReadHosts: new Set(),
   };
 }
 
 export function resetNetworkGuardSessionState(state: NetworkGuardState): void {
   state.blockedHostAttempts.clear();
+  state.sessionReadHosts.clear();
+}
+
+function sessionReadsMode(dependencies: NetworkGuardDependencies): SessionReadsMode {
+  const value = dependencies.getSessionReads ? dependencies.getSessionReads() : process.env[PROTECTME_SESSION_READS_ENV];
+
+  return value === "ask" || value === "open" ? value : undefined;
+}
+
+// A read-only request the session already covers: every host in "open" mode, the hosts the user allowed in "ask" mode.
+function isSessionRead(candidate: BashNetworkRequestCandidate, state: NetworkGuardState, mode: SessionReadsMode): boolean {
+  if (mode === undefined || !isReadOnlyRequest(candidate)) return false;
+
+  return mode === "open" || state.sessionReadHosts.has(candidate.host);
+}
+
+// The command's read-only requests to hosts neither listed nor allowed for the session: what the "ask" prompt offers to allow together.
+function pendingSessionReadHosts(
+  candidates: BashNetworkRequestCandidate[],
+  config: ProtectMeConfigLoadResult,
+  state: NetworkGuardState,
+  mode: SessionReadsMode,
+): string[] {
+  if (mode !== "ask") return [];
+
+  const hosts = candidates
+    .filter((candidate) => isReadOnlyRequest(candidate))
+    .filter((candidate) => !matchAllowedHost(candidate.host, config.effective.allowList).allowed)
+    .filter((candidate) => !state.sessionReadHosts.has(candidate.host))
+    .map((candidate) => candidate.host);
+
+  return [...new Set(hosts)];
 }
 
 export function createDefaultNetworkGuardDependencies(pi: ExtensionAPI): NetworkGuardDependencies {
@@ -228,10 +273,12 @@ export async function handleNetworkGuardToolCall(
   const config = await dependencies.loadConfig(buildNetworkGuardConfigLoadInput(ctx, dependencies));
   if (config.effective.mode === "allow") return undefined;
 
-  const disallowedRequest = findFirstDisallowedRequest(candidates, config, state);
+  const sessionReads = sessionReadsMode(dependencies);
+  const disallowedRequest = findFirstDisallowedRequest(candidates, config, state, sessionReads);
   if (!disallowedRequest) return undefined;
 
-  const decision = await decideDisallowedRequest(ctx, config, disallowedRequest, dependencies);
+  const readHosts = isReadOnlyRequest(disallowedRequest.candidate) ? pendingSessionReadHosts(candidates, config, state, sessionReads) : [];
+  const decision = await decideDisallowedRequest(ctx, config, disallowedRequest, dependencies, state, readHosts);
   if (decision.action === "allow") return undefined;
 
   await logBlockedRequest(toolCallEvent, ctx, config, disallowedRequest, dependencies, decision.outcome);
@@ -258,10 +305,11 @@ export async function handleNetworkGuardUserBash(
   const config = await dependencies.loadConfig(buildNetworkGuardConfigLoadInput(ctx, dependencies));
   if (config.effective.mode === "allow") return undefined;
 
-  const disallowedRequest = findFirstDisallowedRequest(candidates, config, state);
+  // The user's own bash commands are not the session's research: no session reads here.
+  const disallowedRequest = findFirstDisallowedRequest(candidates, config, state, undefined);
   if (!disallowedRequest) return undefined;
 
-  const decision = await decideDisallowedRequest(ctx, config, disallowedRequest, dependencies);
+  const decision = await decideDisallowedRequest(ctx, config, disallowedRequest, dependencies, state, []);
   if (decision.action === "allow") return undefined;
 
   await logBlockedRequest(buildUserBashLogEvent(userBashEvent), ctx, config, disallowedRequest, dependencies, decision.outcome);
@@ -321,9 +369,11 @@ function findFirstDisallowedRequest(
   candidates: BashNetworkRequestCandidate[],
   config: ProtectMeConfigLoadResult,
   state: NetworkGuardState,
+  sessionReads: SessionReadsMode,
 ): DisallowedRequest | null {
   for (const candidate of candidates) {
     if (matchAllowedHost(candidate.host, config.effective.allowList).allowed) continue;
+    if (isSessionRead(candidate, state, sessionReads)) continue;
 
     return {
       candidate,
@@ -339,12 +389,14 @@ async function decideDisallowedRequest(
   config: ProtectMeConfigLoadResult,
   request: DisallowedRequest,
   dependencies: NetworkGuardDependencies,
+  state: NetworkGuardState,
+  readHosts: readonly string[],
 ): Promise<NetworkGuardDecision> {
   if (request.candidate.unsupportedReason) return buildUnsupportedNetworkOptionBlockDecision(request.candidate);
   if (request.attempt === 1) return buildFirstAttemptBlockDecision(request.candidate.host, hasPromptUI(ctx));
   if (!hasPromptUI(ctx)) return buildPromptUnavailableDecision(request.candidate.host);
 
-  return promptForRepeatedBlockedRequest(ctx.ui, config, request, dependencies);
+  return promptForRepeatedBlockedRequest(ctx.ui, config, request, dependencies, state, readHosts);
 }
 
 function buildUnsupportedNetworkOptionBlockDecision(candidate: BashNetworkRequestCandidate): BlockDecision {
@@ -377,16 +429,23 @@ async function promptForRepeatedBlockedRequest(
   config: ProtectMeConfigLoadResult,
   request: DisallowedRequest,
   dependencies: NetworkGuardDependencies,
+  state: NetworkGuardState,
+  readHosts: readonly string[],
 ): Promise<NetworkGuardDecision> {
   let choice: string | undefined;
+  const choices = readHosts.length > 0 ? [PROTECTME_SESSION_READS_CHOICE, ...PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES] : PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES;
 
   try {
-    choice = await ui.select(buildRepeatedAttemptPrompt(config, request), PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES);
+    choice = await ui.select(buildRepeatedAttemptPrompt(config, request, readHosts), choices);
   } catch {
     notifyPromptError(ui);
     return buildPromptErrorDecision(request.candidate.host);
   }
 
+  if (choice === PROTECTME_SESSION_READS_CHOICE && readHosts.length > 0) {
+    for (const host of readHosts) state.sessionReadHosts.add(host);
+    return { action: "allow" };
+  }
   if (choice === PROTECTME_SECOND_ATTEMPT_CHOICES.allowOnce) return { action: "allow" };
   if (choice === PROTECTME_SECOND_ATTEMPT_CHOICES.editConfig) return allowViaConfigWrite(ui, config, request, dependencies);
 
@@ -454,11 +513,12 @@ function isPromptUI(value: unknown): value is NetworkGuardPromptUI {
   return true;
 }
 
-function buildRepeatedAttemptPrompt(config: ProtectMeConfigLoadResult, request: DisallowedRequest): string {
+function buildRepeatedAttemptPrompt(config: ProtectMeConfigLoadResult, request: DisallowedRequest, readHosts: readonly string[]): string {
   const suggestedEntry = buildSuggestedAllowListEntry(request);
 
   return [
     `ProtectMe blocked repeated network request to ${request.candidate.host}.`,
+    ...(readHosts.length > 0 ? [`Read-only requests in this command, to hosts not on the allow list: ${readHosts.join(", ")}`] : []),
     `Attempt: ${request.attempt}`,
     `Suggested allow-list entry: ${suggestedEntry}`,
     `Project config: ${formatConfigSourceForPrompt(config.projectConfig)}`,

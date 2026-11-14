@@ -13,6 +13,7 @@ import {
   PROTECTME_CONFIG_CONFIRM_CHOICES,
   PROTECTME_GUIDANCE_CUSTOM_MESSAGE_TYPE,
   PROTECTME_SECOND_ATTEMPT_CHOICES,
+  PROTECTME_SESSION_READS_CHOICE,
   registerNetworkGuardEvents,
   resetNetworkGuardSessionState,
 } from "../src/events/network-guard.ts";
@@ -1093,3 +1094,73 @@ function buildConfigResult(options = {}) {
     },
   };
 }
+
+// Session reads (PROTECTME_SESSION_READS), set by a host for a research session.
+test("session reads ask: one prompt offers every read-only host of the command, and later reads from them pass", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult());
+  fake.dependencies.getSessionReads = () => "ask";
+  const ctx = createFakeContext({ hasUI: true, selectChoices: [PROTECTME_SESSION_READS_CHOICE] });
+  const event = { toolName: "bash", input: { command: "curl -fsSL https://a.test/x -o x.html && curl -L https://b.test/y -o y.html" } };
+
+  await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies);
+  assert.equal(await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies), undefined);
+  assert.equal(ctx.ui.selectCalls.length, 1);
+  assert.equal(ctx.ui.selectCalls[0].options[0], PROTECTME_SESSION_READS_CHOICE);
+  assert.match(ctx.ui.selectCalls[0].title, /Read-only requests in this command, to hosts not on the allow list: a\.test, b\.test/u);
+
+  // Both hosts are covered now, with no first-attempt block and no prompt.
+  const again = { toolName: "bash", input: { command: "curl https://b.test/z" } };
+  assert.equal(await handleNetworkGuardToolCall(again, ctx, state, fake.dependencies), undefined);
+  assert.equal(ctx.ui.selectCalls.length, 1);
+  assert.equal(fake.projectWrites.length + fake.globalWrites.length, 0);
+
+  // A request that sends data to the same host keeps the normal per-host flow.
+  const upload = { toolName: "bash", input: { command: "curl -d @notes.txt https://b.test/z" } };
+  assert.equal((await handleNetworkGuardToolCall(upload, ctx, state, fake.dependencies))?.block, true);
+  // A new session starts with nothing allowed.
+  resetNetworkGuardSessionState(state);
+  assert.equal((await handleNetworkGuardToolCall(again, ctx, state, fake.dependencies))?.block, true);
+});
+
+test("session reads open: read-only requests pass unasked, uploads and the user's own bash do not", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult());
+  fake.dependencies.getSessionReads = () => "open";
+  const ctx = createFakeContext({ hasUI: true });
+  const call = (command) => handleNetworkGuardToolCall({ toolName: "bash", input: { command } }, ctx, state, fake.dependencies);
+
+  for (const command of ["curl -fsSL https://a.test/x -o x.html", "wget -q https://b.test/y -O y.html", "curl -sS --max-time 45 https://c.test"]) {
+    assert.equal(await call(command), undefined, command);
+  }
+  for (const command of [
+    "curl -d a=1 https://a.test/x",
+    "curl -sSd a=1 https://a.test/x",
+    "curl --data-binary @f https://a.test/x",
+    "curl -F f=@f https://a.test/x",
+    "curl -T f https://a.test/x",
+    "curl -X POST https://a.test/x",
+    "curl --json '{}' https://a.test/x",
+    "wget --post-file=f https://b.test/y",
+    "wget --method=PUT https://b.test/y",
+    "http POST https://d.test/x a=1",
+  ]) {
+    assert.equal((await call(command))?.block, true, command);
+  }
+  // The uploads went through the normal per-host prompt, which never offers the session choice.
+  assert.equal(ctx.ui.selectCalls.some((call) => call.options.includes(PROTECTME_SESSION_READS_CHOICE)), false);
+  const typed = await handleNetworkGuardUserBash({ command: "curl https://e.test" }, ctx, state, fake.dependencies);
+  assert.equal(typed?.result.exitCode !== 0, true);
+});
+
+test("session reads unset or unknown: nothing changes", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult());
+  fake.dependencies.getSessionReads = () => "everything";
+  const ctx = createFakeContext({ hasUI: true, selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.keepBlocked] });
+  const event = { toolName: "bash", input: { command: "curl https://a.test/x" } };
+
+  assert.equal((await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies))?.block, true);
+  assert.equal((await handleNetworkGuardToolCall(event, ctx, state, fake.dependencies))?.block, true);
+  assert.deepEqual(ctx.ui.selectCalls[0].options, Object.values(PROTECTME_SECOND_ATTEMPT_CHOICES));
+});
