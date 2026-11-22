@@ -13,6 +13,7 @@ import {
   PROTECTME_CONFIG_CONFIRM_CHOICES,
   PROTECTME_GUIDANCE_CUSTOM_MESSAGE_TYPE,
   PROTECTME_SECOND_ATTEMPT_CHOICES,
+  PROTECTME_SESSION_READS_ALL_CHOICE,
   PROTECTME_SESSION_READS_CHOICE,
   registerNetworkGuardEvents,
   resetNetworkGuardSessionState,
@@ -1121,6 +1122,29 @@ test("session reads ask: one prompt offers every read-only host of the command, 
   // A new session starts with nothing allowed.
   resetNetworkGuardSessionState(state);
   assert.equal((await handleNetworkGuardToolCall(again, ctx, state, fake.dependencies))?.block, true);
+});
+
+test("session reads ask: the first read-only try asks, all reads can be allowed for the session, uploads keep the silent first block", async () => {
+  const state = createNetworkGuardState();
+  const fake = createFakeDependencies(buildConfigResult());
+  fake.dependencies.getSessionReads = () => "ask";
+  const ctx = createFakeContext({ hasUI: true, selectChoices: [PROTECTME_SESSION_READS_ALL_CHOICE] });
+  const call = (command) => handleNetworkGuardToolCall({ toolName: "bash", input: { command } }, ctx, state, fake.dependencies);
+
+  assert.equal(await call("curl -fsSL https://www.sqlite.org/lang.html"), undefined);
+  assert.equal(ctx.ui.selectCalls.length, 1);
+  assert.match(ctx.ui.selectCalls[0].title, /Attempt: 1/u);
+  assert.deepEqual(ctx.ui.selectCalls[0].options.slice(0, 2), [PROTECTME_SESSION_READS_CHOICE, PROTECTME_SESSION_READS_ALL_CHOICE]);
+
+  assert.equal(await call("curl -s https://man7.org/linux/man-pages/"), undefined);
+  assert.equal(ctx.ui.selectCalls.length, 1);
+
+  // A request that sends data: silent first block with guidance, the repeat asks without the session choices.
+  assert.equal((await call("curl -d a=1 https://man7.org/x"))?.block, true);
+  assert.equal(ctx.ui.selectCalls.length, 1);
+  assert.equal(fake.guidanceMessages.length, 1);
+  assert.equal((await call("curl -d a=1 https://man7.org/x"))?.block, true);
+  assert.deepEqual(ctx.ui.selectCalls[1].options, Object.values(PROTECTME_SECOND_ATTEMPT_CHOICES));
 });
 
 test("session reads open: read-only requests pass unasked, uploads and the user's own bash do not", async () => {

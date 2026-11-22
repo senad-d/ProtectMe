@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8 - Unreleased
+
+- Bumped ProtectMe to 0.1.8 and updated the Pi development dependencies to 1.6.0.
+- `PROTECTME_SESSION_READS=ask` now asks on the first try of a read-only request instead of blocking it silently first (Mission 2026-11-22: every website approval said "Attempt: 2"). The prompt adds "Allow all read-only requests for this session", which lets every later read-only request of the session through unasked. A request that sends data keeps the silent first block.
+- Saving the project config adds `protectme.json` and `.gitignore` to `.pi/.gitignore`, appending missing lines to an existing file, unless git already tracks `.pi/protectme.json`.
+
 ## 0.1.7 - Unreleased
 
 - Bumped the package and lockfile version to 0.1.7.

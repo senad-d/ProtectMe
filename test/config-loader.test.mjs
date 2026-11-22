@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -294,6 +295,28 @@ test("write helpers create parent directories and use two-space JSON", async () 
 
   assert.equal(projectConfigText, '{\n  "mode": "allow",\n  "allowList": [\n    "Example.com"\n  ]\n}\n');
   assert.equal(globalConfigText, '{\n  "mode": "block",\n  "allowList": [\n    "Global.example"\n  ]\n}\n');
+});
+
+test("saving project config keeps git status clean, appends to an existing .pi/.gitignore once, and skips a tracked config", async () => {
+  const paths = createCasePaths("gitignore");
+  const projectRoot = paths.cwd;
+  const ignorePath = join(dirname(paths.projectConfigPath), ".gitignore");
+  const git = (...args) => execFileSync("git", args, { cwd: projectRoot, encoding: "utf8" });
+  await mkdir(projectRoot, { recursive: true });
+  git("init", "-q");
+
+  await mutateProjectProtectMeConfig(paths, () => ({ allowList: ["one.example.com"] }));
+  assert.equal(git("status", "--porcelain"), "");
+
+  await writeRawConfig(ignorePath, "notes.md");
+  await mutateProjectProtectMeConfig(paths, () => ({ allowList: ["two.example.com"] }));
+  await mutateProjectProtectMeConfig(paths, () => ({ allowList: ["three.example.com"] }));
+  assert.equal(await readFile(ignorePath, "utf8"), "notes.md\n.gitignore\nprotectme.json\n");
+
+  await rm(ignorePath);
+  git("add", "-f", paths.projectConfigPath);
+  await mutateProjectProtectMeConfig(paths, () => ({ allowList: ["four.example.com"] }));
+  await assert.rejects(readFile(ignorePath, "utf8"), { code: "ENOENT" });
 });
 
 test("queued project config mutations preserve concurrent allow-list edits", async () => {

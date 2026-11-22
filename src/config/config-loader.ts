@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { basename, dirname, resolve } from "node:path";
+import { promisify } from "node:util";
 
 import { normalizeAllowListEntries } from "../policy/host-matcher.ts";
 import { normalizeHostInput } from "../policy/host-normalization.ts";
@@ -19,6 +21,7 @@ import {
 const CONFIG_JSON_INDENT = 2;
 const PROJECT_CONFIG_IGNORED_MESSAGE = "Project config was not read because the current project is not trusted.";
 const configMutationQueues = new Map<string, Promise<unknown>>();
+const execFileAsync = promisify(execFile);
 let temporaryConfigWriteCounter = 0;
 
 export type ProtectMeConfigMutation = (config: ProtectMeConfigFile) => ProtectMeConfigFile | Promise<ProtectMeConfigFile>;
@@ -160,6 +163,7 @@ export async function writeProjectProtectMeConfig(
   config: ProtectMeConfigFile,
 ): Promise<void> {
   await writeProtectMeConfigFile(paths.projectConfigPath, config);
+  await ensureProjectConfigGitIgnore(paths.projectConfigPath);
 }
 
 interface AllowListMergeResult {
@@ -417,8 +421,50 @@ async function mutateProtectMeConfigFileUnlocked(
 
   const nextConfig = await mutation(currentSource.config ?? {});
   await writeProtectMeConfigFileUnlocked(path, nextConfig);
+  if (source === "project") await ensureProjectConfigGitIgnore(path);
 
   return nextConfig;
+}
+
+// Keeps a saved project config out of `git add -A` with a .gitignore beside it, unless the project already tracks the config.
+async function ensureProjectConfigGitIgnore(configPath: string): Promise<void> {
+  const ignorePath = resolve(dirname(configPath), ".gitignore");
+
+  try {
+    if (await isTrackedByGit(configPath)) return;
+    await enqueueConfigMutation(ignorePath, () => appendMissingGitIgnoreLines(ignorePath, [".gitignore", basename(configPath)]));
+  } catch {
+    // A failed ignore write must not undo or fail a saved config.
+  }
+}
+
+async function isTrackedByGit(path: string): Promise<boolean> {
+  try {
+    await execFileAsync("git", ["ls-files", "--error-unmatch", "--", basename(path)], { cwd: dirname(path) });
+    return true;
+  } catch {
+    // Untracked, outside a repository, or no git.
+    return false;
+  }
+}
+
+async function appendMissingGitIgnoreLines(ignorePath: string, lines: string[]): Promise<void> {
+  const current = await readMissingAsEmpty(ignorePath);
+  const present = new Set(current.split(/\r?\n/u).map((line) => line.trim()));
+  const missing = lines.filter((line) => !present.has(line));
+  if (missing.length === 0) return;
+
+  const separator = current === "" || current.endsWith("\n") ? "" : "\n";
+  await writeFile(ignorePath, `${current}${separator}${missing.join("\n")}\n`, "utf8");
+}
+
+async function readMissingAsEmpty(path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return "";
+    throw error;
+  }
 }
 
 async function ensureProtectMeConfigFileUnlocked(

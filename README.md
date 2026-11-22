@@ -108,7 +108,7 @@ ProtectMe reads JSON config from global and project-local files. It does not req
 | Scope | Path | Notes |
 | --- | --- | --- |
 | Global | `~/.pi/agent/protectme.json` | Applies across projects. `PI_CODING_AGENT_DIR` moves this path in standard Pi installations. |
-| Project | `.pi/protectme.json` | Applies only when Pi reports the project as trusted. Inside a linked git worktree, this path resolves to the main worktree, so saved entries outlive the worktree. |
+| Project | `.pi/protectme.json` | Applies only when Pi reports the project as trusted. Inside a linked git worktree, this path resolves to the main worktree, so saved entries outlive the worktree. On save, ProtectMe adds `protectme.json` and `.gitignore` to `.pi/.gitignore` unless git already tracks the config. |
 | Block log | `.pi/agent/protectme_log.jsonl` | Append-only local log for blocked attempts. Allowed requests are not logged. Resolves to the main worktree like project config, and ProtectMe writes a `.gitignore` next to it when none exists. |
 
 Schema:

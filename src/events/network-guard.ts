@@ -60,10 +60,11 @@ export const PROTECTME_SECOND_ATTEMPT_CHOICES = {
 } as const;
 
 // Session reads (PROTECTME_SESSION_READS): a host that runs research sets it for that
-// session. "ask" adds this choice to the prompt of a read-only request; "open" lets
-// read-only requests through unasked. A request that sends data keeps the normal prompt.
+// session. "ask" prompts on the first try of a read-only request and adds these choices;
+// "open" lets read-only requests through unasked. A request that sends data keeps the normal flow.
 export const PROTECTME_SESSION_READS_ENV = "PROTECTME_SESSION_READS";
 export const PROTECTME_SESSION_READS_CHOICE = "Allow reads from the listed hosts for this session";
+export const PROTECTME_SESSION_READS_ALL_CHOICE = "Allow all read-only requests for this session";
 
 export const PROTECTME_CONFIG_CONFIRM_CHOICES = {
   saveProjectAndAllow: "Save to project config and allow this call",
@@ -84,6 +85,8 @@ export interface NetworkGuardState {
   blockedHostAttempts: Map<string, number>;
   // Hosts the user allowed read-only requests to for this session (session reads "ask").
   sessionReadHosts: Set<string>;
+  // The user allowed every read-only request for this session (session reads "ask").
+  sessionReadsAll: boolean;
 }
 
 export interface NetworkGuardGuidanceOptions {
@@ -168,12 +171,14 @@ export function createNetworkGuardState(): NetworkGuardState {
   return {
     blockedHostAttempts: new Map(),
     sessionReadHosts: new Set(),
+    sessionReadsAll: false,
   };
 }
 
 export function resetNetworkGuardSessionState(state: NetworkGuardState): void {
   state.blockedHostAttempts.clear();
   state.sessionReadHosts.clear();
+  state.sessionReadsAll = false;
 }
 
 function sessionReadsMode(dependencies: NetworkGuardDependencies): SessionReadsMode {
@@ -182,11 +187,11 @@ function sessionReadsMode(dependencies: NetworkGuardDependencies): SessionReadsM
   return value === "ask" || value === "open" ? value : undefined;
 }
 
-// A read-only request the session already covers: every host in "open" mode, the hosts the user allowed in "ask" mode.
+// A read-only request the session already covers: every host in "open" mode, the hosts (or all hosts) the user allowed in "ask" mode.
 function isSessionRead(candidate: BashNetworkRequestCandidate, state: NetworkGuardState, mode: SessionReadsMode): boolean {
   if (mode === undefined || !isReadOnlyRequest(candidate)) return false;
 
-  return mode === "open" || state.sessionReadHosts.has(candidate.host);
+  return mode === "open" || state.sessionReadsAll || state.sessionReadHosts.has(candidate.host);
 }
 
 // The command's read-only requests to hosts neither listed nor allowed for the session: what the "ask" prompt offers to allow together.
@@ -393,7 +398,9 @@ async function decideDisallowedRequest(
   readHosts: readonly string[],
 ): Promise<NetworkGuardDecision> {
   if (request.candidate.unsupportedReason) return buildUnsupportedNetworkOptionBlockDecision(request.candidate);
-  if (request.attempt === 1) return buildFirstAttemptBlockDecision(request.candidate.host, hasPromptUI(ctx));
+  // readHosts is non-empty only for a read-only request in session reads "ask": that one asks on the first try.
+  const askNow = readHosts.length > 0 && hasPromptUI(ctx);
+  if (request.attempt === 1 && !askNow) return buildFirstAttemptBlockDecision(request.candidate.host, hasPromptUI(ctx));
   if (!hasPromptUI(ctx)) return buildPromptUnavailableDecision(request.candidate.host);
 
   return promptForRepeatedBlockedRequest(ctx.ui, config, request, dependencies, state, readHosts);
@@ -433,7 +440,10 @@ async function promptForRepeatedBlockedRequest(
   readHosts: readonly string[],
 ): Promise<NetworkGuardDecision> {
   let choice: string | undefined;
-  const choices = readHosts.length > 0 ? [PROTECTME_SESSION_READS_CHOICE, ...PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES] : PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES;
+  const choices =
+    readHosts.length > 0
+      ? [PROTECTME_SESSION_READS_CHOICE, PROTECTME_SESSION_READS_ALL_CHOICE, ...PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES]
+      : PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES;
 
   try {
     choice = await ui.select(buildRepeatedAttemptPrompt(config, request, readHosts), choices);
@@ -444,6 +454,10 @@ async function promptForRepeatedBlockedRequest(
 
   if (choice === PROTECTME_SESSION_READS_CHOICE && readHosts.length > 0) {
     for (const host of readHosts) state.sessionReadHosts.add(host);
+    return { action: "allow" };
+  }
+  if (choice === PROTECTME_SESSION_READS_ALL_CHOICE && readHosts.length > 0) {
+    state.sessionReadsAll = true;
     return { action: "allow" };
   }
   if (choice === PROTECTME_SECOND_ATTEMPT_CHOICES.allowOnce) return { action: "allow" };
@@ -517,7 +531,7 @@ function buildRepeatedAttemptPrompt(config: ProtectMeConfigLoadResult, request: 
   const suggestedEntry = buildSuggestedAllowListEntry(request);
 
   return [
-    `ProtectMe blocked repeated network request to ${request.candidate.host}.`,
+    `ProtectMe blocked ${request.attempt > 1 ? "repeated " : ""}network request to ${request.candidate.host}.`,
     ...(readHosts.length > 0 ? [`Read-only requests in this command, to hosts not on the allow list: ${readHosts.join(", ")}`] : []),
     `Attempt: ${request.attempt}`,
     `Suggested allow-list entry: ${suggestedEntry}`,

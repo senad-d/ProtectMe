@@ -79,3 +79,28 @@ Run the full validation suite and coverage tests, submit a Sonar scan, replace t
 - `npm run validate`: passed, including lint, typecheck, formatting, 142 tests, and package-content checks.
 - `npm run test:coverage`: passed and generated `coverage/lcov.info`.
 - Sonar analysis for 0.1.7: quality gate passed, 98.0% coverage, no active issues, vulnerabilities, or security hotspots.
+
+### 4. Validate ProtectMe 0.1.8 against Pi 1.6.0
+
+- [x] Bump ProtectMe to 0.1.8 and validate the release against Pi 1.6.0.
+
+#### Why
+The pending ProtectMe changes need a new patch version, and the local Pi installation has moved to 1.6.0.
+
+#### How
+Update the package version and Pi development dependencies, run local validation and coverage, and review a fresh Sonar analysis.
+
+#### Where
+- `package.json`
+- `package-lock.json`
+- `CHANGELOG.md`
+
+#### Acceptance criteria
+- The package and lockfile declare version 0.1.8, and the lockfile resolves the Pi development dependencies to 1.6.0.
+- Local validation and coverage tests pass.
+- A fresh Sonar analysis passes the quality gate with no active issues or security hotspots requiring review.
+
+#### Validation
+- `npm run validate`: passed, including 144 tests and package-content checks.
+- `npm run test:coverage`: passed and generated `coverage/lcov.info`.
+- Sonar analysis for 0.1.8: quality gate passed, 98.0% coverage, no active issues, vulnerabilities, or security hotspots requiring review.
