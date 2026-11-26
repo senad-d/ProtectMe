@@ -80,6 +80,7 @@ export function mergeProtectMeConfigs(
   return {
     mode,
     allowList: allowListMerge.allowList,
+    denyList: mergeDenyListEntries(configSources, warnings),
     modeSource,
     allowListSources: allowListMerge.allowListSources,
     configSources,
@@ -184,16 +185,21 @@ function validateProtectMeConfigValue(
     return buildInvalidConfigSource(source, path, 'Config field "mode" must be "block" or "allow" when present.');
   }
 
-  const allowList = validateAllowList(value.allowList);
+  const allowList = validateHostList(value.allowList);
   if (allowList === "invalid") {
     return buildInvalidConfigSource(source, path, 'Config field "allowList" must be an array of strings when present.');
+  }
+
+  const denyList = validateHostList(value.denyList);
+  if (denyList === "invalid") {
+    return buildInvalidConfigSource(source, path, 'Config field "denyList" must be an array of strings when present.');
   }
 
   return {
     source,
     path,
     status: "valid",
-    config: buildConfigFile(mode, allowList),
+    config: buildConfigFile(mode, allowList, denyList),
   };
 }
 
@@ -208,7 +214,7 @@ function validateMode(value: unknown): ProtectMeMode | undefined | "invalid" {
   return "invalid";
 }
 
-function validateAllowList(value: unknown): string[] | undefined | "invalid" {
+function validateHostList(value: unknown): string[] | undefined | "invalid" {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) return "invalid";
   if (!value.every((entry) => typeof entry === "string")) return "invalid";
@@ -216,10 +222,15 @@ function validateAllowList(value: unknown): string[] | undefined | "invalid" {
   return value;
 }
 
-function buildConfigFile(mode: ProtectMeMode | undefined, allowList: string[] | undefined): ProtectMeConfigFile {
+function buildConfigFile(
+  mode: ProtectMeMode | undefined,
+  allowList: string[] | undefined,
+  denyList: string[] | undefined,
+): ProtectMeConfigFile {
   const config: ProtectMeConfigFile = {};
   if (mode) config.mode = mode;
   if (allowList) config.allowList = allowList;
+  if (denyList) config.denyList = denyList;
 
   return config;
 }
@@ -309,13 +320,17 @@ function buildFailClosedEffectiveConfig(
   configSources: ParsedProtectMeConfig[],
   warnings: string[],
 ): EffectiveProtectMeConfig {
+  const failClosedWarnings = [...warnings, buildFailClosedConfigWarning(configSources)];
+
   return {
     mode: DEFAULT_PROTECTME_MODE,
     allowList: [],
+    // The deny entries of a source that is still valid keep applying.
+    denyList: mergeDenyListEntries(configSources, failClosedWarnings),
     modeSource: "default",
     allowListSources: [],
     configSources,
-    warnings: [...warnings, buildFailClosedConfigWarning(configSources)],
+    warnings: failClosedWarnings,
   };
 }
 
@@ -388,6 +403,22 @@ function appendAllowListEntries(
   if (addedEntry) allowListSources.push(configSource.source);
 }
 
+function mergeDenyListEntries(configSources: ParsedProtectMeConfig[], warnings: string[]): string[] {
+  const denyList: string[] = [];
+
+  for (const configSource of configSources) {
+    if (configSource.status !== "valid" || !configSource.config?.denyList) continue;
+
+    const normalizedDenyList = normalizeAllowListEntries(configSource.config.denyList);
+    denyList.push(...normalizedDenyList.entries);
+    for (const warning of normalizedDenyList.warnings) {
+      warnings.push(`${configSource.source} denyList entry ignored (${JSON.stringify(warning.input)}): ${warning.message}`);
+    }
+  }
+
+  return denyList;
+}
+
 function appendAllowListWarnings(
   source: ProtectMeConfigSource,
   warnings: string[],
@@ -411,6 +442,8 @@ async function writeProtectMeConfigFileUnlocked(path: string, config: ProtectMeC
   await rename(temporaryPath, path);
 }
 
+// Reads the file again on every call, so an entry another agent saved since the last load is kept.
+// ponytail: no cross-process lock, two saves in the same millisecond can lose one; a lock file if that shows up
 async function mutateProtectMeConfigFileUnlocked(
   source: ProtectMeConfigSource,
   path: string,

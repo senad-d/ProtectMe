@@ -10,6 +10,7 @@ export {
 export {
   buildProtectMeBlockReason,
   buildProtectMeConfigWriteFailedBlockReason,
+  buildProtectMeDeniedBlockReason,
   buildProtectMeFirstBlockGuidance,
   buildProtectMePromptDeniedBlockReason,
   buildProtectMePromptErrorBlockReason,

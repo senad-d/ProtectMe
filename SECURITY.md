@@ -47,7 +47,7 @@ ProtectMe reads configuration from:
 
 ProtectMe creates a missing global config file at `~/.pi/agent/protectme.json` with built-in defaults during runtime load. Other config writes happen only through explicit user-facing flows:
 
-- repeated blocked-attempt prompt choices with a project/global save-target confirmation,
+- one approval prompt for a repeated blocked request: allow or deny, once, for the session, for the project, or globally,
 - `/protectme` TUI editing actions with a project/global save-target confirmation.
 
 Project config writes target `.pi/protectme.json`. Global config writes target `~/.pi/agent/protectme.json`. Writes create parent directories as needed and serialize JSON with two-space indentation. Write failures are shown as errors, and existing config files are not intentionally corrupted or partially rewritten.
@@ -72,12 +72,12 @@ Each JSON line may include:
 - attempt count,
 - effective mode,
 - config source metadata,
-- outcome (`blocked`, `prompt_denied`, `prompt_error`, or `prompt_unavailable`),
+- outcome (`blocked`, `denied`, `prompt_allowed_<scope>`, `prompt_denied_<scope>`, `prompt_error`, or `prompt_unavailable`),
 - command snippet metadata.
 
 Command snippets are bounded, visibly truncated when long, and redact common authorization headers and secret assignment fragments. Logs can still contain sensitive project paths, hostnames, command structure, or non-redacted arguments. Do not commit or share `.pi/agent/protectme_log.jsonl` from sensitive repositories.
 
-Allowed requests are not logged.
+Requests to listed hosts are not logged. A request the user allowed in the approval prompt is.
 
 ## Safe usage guidance
 

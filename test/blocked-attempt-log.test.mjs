@@ -75,6 +75,19 @@ test("allowed requests are not logged", async () => {
   await assert.rejects(access(paths.blockedAttemptLogPath), { code: "ENOENT" });
 });
 
+test("a prompt allow is logged and is not a recent blocked host", async () => {
+  const paths = createCasePaths("prompt-allowed");
+  await appendProtectMeRequestAttemptLog({ ...baseBlockedAttemptInput(paths), host: "denied.example", outcome: "prompt_denied_session" });
+  const result = await appendProtectMeRequestAttemptLog({ ...baseBlockedAttemptInput(paths), outcome: "prompt_allowed_project" });
+
+  assert.equal(result.logged, true);
+  assert.deepEqual(
+    (await readJsonLines(paths.blockedAttemptLogPath)).map((line) => line.outcome),
+    ["prompt_denied_session", "prompt_allowed_project"],
+  );
+  assert.deepEqual(await readRecentBlockedHosts(paths.blockedAttemptLogPath), ["denied.example"]);
+});
+
 test("long command snippets are truncated and visibly marked", async () => {
   const paths = createCasePaths("truncated");
   const secretCommand = `curl -H 'Authorization: Bearer super-secret-token' https://example.com/${"a".repeat(120)}?token=secret`;

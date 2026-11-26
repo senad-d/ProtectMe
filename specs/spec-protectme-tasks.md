@@ -104,3 +104,28 @@ Update the package version and Pi development dependencies, run local validation
 - `npm run validate`: passed, including 144 tests and package-content checks.
 - `npm run test:coverage`: passed and generated `coverage/lcov.info`.
 - Sonar analysis for 0.1.8: quality gate passed, 98.0% coverage, no active issues, vulnerabilities, or security hotspots requiring review.
+
+### 5. Validate ProtectMe 0.2.0 and fix Sonar findings
+
+- [x] Run local validation and address the three network guard findings from Sonar.
+
+#### Why
+The audit log must retain candidate order and the approval behavior must stay the same while resolving the maintainability findings.
+
+#### How
+Chain audit writes, load session lists in the decision function, and format saved entries separately from the prompt title. Test audit ordering with a delayed write.
+
+#### Where
+- `src/events/network-guard.ts`
+- `test/network-guard.test.mjs`
+- `CHANGELOG.md`
+
+#### Acceptance criteria
+- Multi-host audit writes finish in candidate order before the command proceeds, and existing approval tests pass.
+- Local validation and coverage tests pass.
+- A fresh Sonar analysis passes the quality gate with no active issues.
+
+#### Validation
+- `npm run validate`: passed, including 152 tests and package-content checks.
+- `npm run test:coverage`: passed and generated `coverage/lcov.info`.
+- Sonar analysis: quality gate passed, 98.0% coverage, no active issues, vulnerabilities, or security hotspots.

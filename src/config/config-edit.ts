@@ -59,36 +59,29 @@ export function readProtectMeConfigSourceAllowListEntries(configSource: ParsedPr
 }
 
 export function setProtectMeConfigMode(config: ProtectMeConfigFile, mode: ProtectMeMode): ProtectMeConfigFile {
-  const nextConfig: ProtectMeConfigFile = { mode };
-  if (config.allowList) nextConfig.allowList = config.allowList;
-
-  return nextConfig;
+  return { ...config, mode };
 }
 
 export function appendProtectMeConfigAllowListEntry(config: ProtectMeConfigFile, entry: string): ProtectMeConfigFile {
-  const rawAllowList = config.allowList ?? [];
+  return appendProtectMeConfigListEntry(config, "allowList", entry);
+}
+
+export function appendProtectMeConfigListEntry(
+  config: ProtectMeConfigFile,
+  list: "allowList" | "denyList",
+  entry: string,
+): ProtectMeConfigFile {
+  const rawList = config[list] ?? [];
   const normalizedEntry = normalizeConfigAllowListEntry(entry);
-  if (!normalizedEntry) return buildProtectMeConfigWithAllowList(config, rawAllowList);
+  if (!normalizedEntry || normalizeConfigAllowList(rawList).includes(normalizedEntry)) return { ...config, [list]: rawList };
 
-  const normalizedAllowList = normalizeConfigAllowList(rawAllowList);
-  const allowList = normalizedAllowList.includes(normalizedEntry) ? rawAllowList : [...rawAllowList, normalizedEntry];
-
-  return buildProtectMeConfigWithAllowList(config, allowList);
+  return { ...config, [list]: [...rawList, normalizedEntry] };
 }
 
 export function removeProtectMeConfigAllowListEntry(config: ProtectMeConfigFile, entry: string): ProtectMeConfigFile {
   const rawAllowList = config.allowList ?? [];
   const normalizedEntry = normalizeConfigAllowListEntry(entry);
-  if (!normalizedEntry) return buildProtectMeConfigWithAllowList(config, rawAllowList);
+  if (!normalizedEntry) return { ...config, allowList: rawAllowList };
 
-  const allowList = rawAllowList.filter((allowListEntry) => normalizeConfigAllowListEntry(allowListEntry) !== normalizedEntry);
-
-  return buildProtectMeConfigWithAllowList(config, allowList);
-}
-
-function buildProtectMeConfigWithAllowList(config: ProtectMeConfigFile, allowList: string[]): ProtectMeConfigFile {
-  const nextConfig: ProtectMeConfigFile = { allowList };
-  if (config.mode) nextConfig.mode = config.mode;
-
-  return nextConfig;
+  return { ...config, allowList: rawAllowList.filter((allowListEntry) => normalizeConfigAllowListEntry(allowListEntry) !== normalizedEntry) };
 }

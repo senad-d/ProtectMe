@@ -142,15 +142,21 @@ When a detected request host is not allowed and effective `mode` is `block`:
    - the agent should continue with local or already allowed work, or ask the user when access is necessary.
 6. On second and later blocks for the same host, prompt the user when UI is available.
 
-Prompt choices:
-- Allow once.
-- Edit allow-list entry and choose config before saving.
-- Keep blocked.
+A host on a deny list (config `denyList`, or denied for the session) is refused before any of this: no prompt, no repeat guidance, and a block reason that says the host is on the deny list.
 
-Save confirmation choices:
-- Save to project config and allow this call.
-- Save to global config and allow this call.
-- Cancel without saving.
+Prompt (one `ctx.ui.select`, since 0.2.0):
+- The title says whether the request is read-only or sends data, lists every unlisted host of the command, and shows what a saved choice writes (`Saves: example.org (and its subdomains)`). It shows no config paths.
+- The choice applies to every listed host. The saved entry per host is its registrable domain.
+- Choices, in this order: `Allow once`, `Allow for session`, `Allow for project`, `Allow globally`, `Deny once`, `Deny for session`, `Deny for project`, `Deny globally`.
+- The project choices are left out when the project config cannot be written (untrusted project, invalid file). The global choices are left out when the global config is invalid or unreadable.
+- A cancelled prompt is `Deny once`.
+- Session choices are kept in memory, or in the JSON file named by `PROTECTME_SESSION_CONFIG` (`{ allowList, denyList }`, created on first save, read on every request).
+- With `PROTECTME_SESSION_READS=ask`, a command with only read-only requests is asked about on the first try, and the prompt has a ninth row: `Allow all read-only requests for this session`.
+- There is no editor step and no "choose config" step. `/protectme` edits entries by hand.
+
+Prompt events:
+- When the prompt opens, emit `herdr:blocked` on `pi.events`: `{ active: true, id, label, guard: { name: "protectme", kind: "network", title, tool, command, subject, reason, rule: { pattern, covers, exact: false, scopes }, options } }`. `command` is redacted and capped at 4000 characters. `options` are the labels in drawn order.
+- When it closes, emit `{ active: false, id }`.
 
 Non-UI behavior:
 - No prompt is possible.
@@ -165,7 +171,7 @@ Use two complementary channels:
 The guidance should be compact and should include only recent blocked hosts for the current session.
 
 ### Logging
-Log only blocked attempts.
+Log blocked attempts and the choices made in the prompt, one line per host. A request to a listed host is not logged.
 
 Path:
 
@@ -184,9 +190,9 @@ Each line should be JSON with fields such as:
 - `attempt`
 - `mode`
 - `configSources`
-- `outcome`: `blocked`, `prompt_denied`, `prompt_unavailable`, or similar
+- `outcome`: `blocked`, `denied` (deny list), `prompt_allowed_<scope>`, `prompt_denied_<scope>` (scope: `once`, `session`, `project`, `global`), `prompt_error`, or `prompt_unavailable`
 
-Do not log allowed requests. Do not log secrets beyond the minimum needed to debug blocked network attempts. Consider truncating long commands.
+Do not log secrets beyond the minimum needed to debug blocked network attempts. Consider truncating long commands.
 
 ### TUI architecture
 The `/protectme` command opens a configuration and information panel.

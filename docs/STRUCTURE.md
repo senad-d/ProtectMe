@@ -13,15 +13,15 @@ src/
 │   ├── config-types.ts           # user config, parsed metadata, and effective config types
 │   └── index.ts                  # config barrel exports and registration hook
 ├── events/
-│   └── network-guard.ts          # lifecycle status/warnings, attempt state, blocking, prompts, and config writes
+│   └── network-guard.ts          # lifecycle status/warnings, attempt and session state, blocking, the approval prompt, herdr:blocked events, and config writes
 ├── logging/
 │   └── blocked-attempt-log.ts    # blocked-attempt JSONL helpers and registration hook
 ├── policy/
 │   ├── bash-url-extractor.ts     # supported bash request CLI segmentation and URL extraction
 │   ├── block-message.ts          # consistent ProtectMe block reason and agent guidance text
-│   ├── host-matcher.ts           # allow-list normalization and host matching helpers
+│   ├── host-matcher.ts           # allow-list and deny-list normalization and host matching helpers
 │   ├── host-normalization.ts     # host/URL cleanup, validation, and warning metadata
-│   ├── prompt-suggestion.ts      # clean editable allow-entry suggestions for repeated blocks
+│   ├── prompt-suggestion.ts      # the entry a prompt choice saves: the registrable domain of a host
 │   └── index.ts                  # policy barrel exports and registration hook
 ├── ui/
 │   ├── protectme-panel.ts        # /protectme command registration and command-mode gating
@@ -40,7 +40,7 @@ src/
 - `events/network-guard.ts` registers `session_start`, `session_shutdown`, and `tool_call` behavior.
 - `ui/protectme-panel.ts` registers `/protectme` and loads config/log summaries before opening the TUI component.
 - `ui/protectme-panel/` keeps keyboard routing, action execution, and pure rendering in separately testable modules.
-- `logging/blocked-attempt-log.ts` owns JSONL entry construction, redaction/truncation, directory creation, and appending blocked attempts.
+- `logging/blocked-attempt-log.ts` owns JSONL entry construction, redaction/truncation, directory creation, and appending blocked attempts and prompt choices.
 - `config/` owns config schema validation, path resolution, load/merge semantics, normalization, and safe write-back.
 - `policy/` owns pure request detection, host normalization, matching, and clean prompt suggestions.
 
@@ -50,6 +50,7 @@ src/
 ~/.pi/agent/protectme.json       # global config
 .pi/protectme.json               # project config
 .pi/agent/protectme_log.jsonl    # project blocked-attempt log
+$PROTECTME_SESSION_CONFIG        # optional session allow and deny lists, same JSON shape without mode
 ```
 
 The implemented config schema is:
@@ -57,15 +58,18 @@ The implemented config schema is:
 ```json
 {
   "mode": "block",
-  "allowList": ["example.com"]
+  "allowList": ["example.com"],
+  "denyList": ["tracker.example"]
 }
 ```
+
+`denyList` entries of the global and the trusted project config are joined. A deny entry wins over an allow entry, and a denied host is refused with no prompt. Hosts allowed or denied "for session" in the approval prompt live in memory in `events/network-guard.ts`, or in the file named by `PROTECTME_SESSION_CONFIG`, which is read on every request.
 
 Built-in starter entries load first, then global allow-list entries, then trusted project entries. Project mode overrides global mode when present. Runtime loading creates a missing global config with `mode: "block"` and the starter allow list (`localhost`, `127.0.0.1`, `::1`, `pi.dev`, `github.com`, `npmjs.com`, `registry.npmjs.org`, and `nodejs.org`); missing project config still defaults through the built-in starter policy. Invalid or unreadable config fails closed with an empty effective allow list and emits warnings.
 
 ## Module ownership
 
-- `config/` owns JSON schema handling for `mode` and `allowList`.
+- `config/` owns JSON schema handling for `mode`, `allowList` and `denyList`.
 - `policy/` owns pure helpers for request detection and host matching.
 - `events/` owns Pi runtime wiring and must stay thin.
 - `logging/` owns `.pi/agent/protectme_log.jsonl` writes.

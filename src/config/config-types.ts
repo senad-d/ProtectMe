@@ -26,6 +26,7 @@ export interface ProtectMeConfig {
 export interface ProtectMeConfigFile {
   mode?: ProtectMeMode;
   allowList?: string[];
+  denyList?: string[];
 }
 
 export interface ProtectMeConfigSourceMetadata {
@@ -40,6 +41,7 @@ export interface ParsedProtectMeConfig extends ProtectMeConfigSourceMetadata {
 }
 
 export interface EffectiveProtectMeConfig extends ProtectMeConfig {
+  denyList: string[];
   modeSource: ProtectMeModeSource;
   allowListSources: ProtectMeConfigSource[];
   configSources: ParsedProtectMeConfig[];

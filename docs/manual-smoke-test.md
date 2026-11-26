@@ -34,8 +34,8 @@ Inside the isolated Pi TUI session:
 7. Press `q` to close the panel.
 8. Ask the agent to run a harmless non-network URL literal command such as `echo https://example.invalid`; it should not be blocked because no supported request CLI is used.
 9. Run `!echo https://example.invalid`; it should not be blocked because no supported request CLI is used.
-10. Optional agent guard check: ask the agent to run `curl https://example.invalid/protectme-smoke`. ProtectMe should block before the command proceeds. If prompted on repeat, choose **Keep blocked**.
-11. Optional user bash guard check: run `!curl https://example.invalid/protectme-user-smoke`. ProtectMe should return a blocked bash result before the command proceeds. Repeat it and choose **Keep blocked** if prompted.
+10. Optional agent guard check: ask the agent to run `curl https://example.invalid/protectme-smoke`. ProtectMe should block before the command proceeds. Repeat the request: one prompt opens with the host, a `Saves:` line and eight choices (`Allow once` to `Deny globally`). Choose **Deny once**.
+11. Optional user bash guard check: run `!curl https://example.invalid/protectme-user-smoke`. ProtectMe should return a blocked bash result before the command proceeds. Repeat it and choose **Deny for session** in the prompt. Run it a third time: it is refused at once with "the host is on the deny list" and no prompt.
 12. Reopen `/protectme` and verify recent blocked hosts/counts refresh if an optional guard check was performed.
 
 ## Evidence template

@@ -243,6 +243,40 @@ test("public suffix allowList entries are ignored while single-label entries sta
   assert.match(result.effective.warnings.join("\n"), /global allowList entry ignored \("co.uk"\): Public suffix entries/);
 });
 
+test("denyList merges from both configs, survives a broken other source, and must be an array of strings", async () => {
+  const paths = createCasePaths("deny-list");
+  await writeJsonConfig(paths.globalConfigPath, { denyList: ["https://Tracker.example/x", "bad host"] });
+  await writeJsonConfig(paths.projectConfigPath, { allowList: ["api.tracker.example"], denyList: ["ads.example"] });
+
+  const result = await loadProtectMeConfig(paths);
+
+  assert.deepEqual(result.effective.denyList, ["tracker.example", "ads.example"]);
+  assert.deepEqual(result.globalConfig.config, { denyList: ["https://Tracker.example/x", "bad host"] });
+  assert.equal(result.effective.warnings.some((warning) => warning.startsWith('global denyList entry ignored ("bad host")')), true);
+
+  await writeRawConfig(paths.projectConfigPath, "{");
+  assert.deepEqual((await loadProtectMeConfig(paths)).effective.denyList, ["tracker.example"]);
+
+  const invalid = parseProtectMeConfigText("project", paths.projectConfigPath, JSON.stringify({ denyList: "tracker.example" }));
+  assert.equal(invalid.status, "invalid");
+  assert.equal(invalid.message, 'Config field "denyList" must be an array of strings when present.');
+});
+
+test("a config mutation appends to the file as it is on disk, not to an older copy", async () => {
+  const paths = createCasePaths("fresh-read");
+  await writeJsonConfig(paths.globalConfigPath, { allowList: ["one.example"] });
+  await loadProtectMeConfig(paths);
+  // Another process saves an entry after this one loaded the config.
+  await writeJsonConfig(paths.globalConfigPath, { allowList: ["one.example", "two.example"], denyList: ["ads.example"] });
+
+  await mutateGlobalProtectMeConfig(paths, (config) => ({ ...config, allowList: [...(config.allowList ?? []), "three.example"] }));
+
+  assert.deepEqual(JSON.parse(await readFile(paths.globalConfigPath, "utf8")), {
+    allowList: ["one.example", "two.example", "three.example"],
+    denyList: ["ads.example"],
+  });
+});
+
 test("invalid JSON config fails closed with metadata", async () => {
   const paths = createCasePaths("invalid-json");
   await writeRawConfig(paths.globalConfigPath, "{");

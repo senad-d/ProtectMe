@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0 - 2026-11-26
+
+The approval prompt. One list replaces the three steps of the old prompt, and a choice can be saved for the session, the project or everywhere.
+
+- New `denyList` in the config, with the same entry format as `allowList`. A deny entry wins over an allow entry. A denied host is refused at once, with no prompt and no hint to repeat the request.
+- The prompt is one list: `Allow once`, `Allow for session`, `Allow for project`, `Allow globally`, `Deny once`, `Deny for session`, `Deny for project`, `Deny globally`. A cancelled prompt is `Deny once`. The project choices are left out for an untrusted project, and a scope whose config file is broken is left out too.
+- Removed the editor step and the "choose config" step from the prompt. `/protectme` still edits entries by hand.
+- The prompt lists every unlisted host of the command, and the choice applies to all of them. Before, it asked about the first host only and let the others run.
+- The prompt says whether the request is read-only or sends data, and what a saved choice writes: `Saves: example.org (and its subdomains)`. It no longer shows config paths or an attempt number.
+- Session scope for every request: allowed and denied hosts are kept in memory until the session ends, or in the JSON file named by `PROTECTME_SESSION_CONFIG` (`{ "allowList": [], "denyList": [] }`). The file is created on the first save and read on every call, so several sessions can share it.
+- With `PROTECTME_SESSION_READS=ask`, "Allow reads from the listed hosts for this session" is replaced by `Allow for session`. "Allow all read-only requests for this session" stays as a ninth row.
+- ProtectMe emits `herdr:blocked` on `pi.events` when the prompt opens (`{ active: true, id, label, guard }`) and when it closes (`{ active: false, id }`). `guard` holds the redacted command, the hosts, the reason, the entry a choice saves and the option labels.
+- Allows and denies from the prompt are logged, one line per host: `prompt_allowed_once|session|project|global` and `prompt_denied_once|session|project|global`. A refusal by a deny list is logged as `denied`. `prompt_denied` is gone, and a failed save is logged as `prompt_error`.
+- A refusal by a deny list reads `ProtectMe denied network request to <host>: the host is on the deny list.` The first-block sentence is unchanged.
+- `/protectme` edits keep the `denyList` of the file they write.
+- Simplified network guard decisions and approval text formatting, and verified that multi-host audit records are still written in order.
+- Bumped the package and lockfile version to 0.2.0.
+
 ## 0.1.8 - Unreleased
 
 - Bumped ProtectMe to 0.1.8 and updated the Pi development dependencies to 1.6.0.

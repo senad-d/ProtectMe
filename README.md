@@ -30,9 +30,9 @@ ProtectMe is a Pi extension for coding agents. It guards supported shell-network
 </table>
 
 - **Network guard boundary:** covers supported `curl`, `wget`, `http`, and `https` invocations from Pi agent `bash` calls and Pi user bash commands.
-- **Allow-list policy:** default `block` mode permits a small developer starter list and denies other unknown hosts; `allow` mode is available as an explicit temporary bypass.
+- **Allow-list and deny-list policy:** default `block` mode permits a small developer starter list and denies other unknown hosts; a deny list refuses hosts outright; `allow` mode is available as an explicit temporary bypass.
 - **Project-aware configuration:** trusted project config can extend global allow lists and override mode.
-- **Prompted approvals:** repeated blocked hosts can be allowed once or added to a user-selected project/global config when Pi UI confirmation is available.
+- **Prompted approvals:** a repeated blocked request opens one prompt: allow or deny, once, for the session, for the project, or globally.
 - **Secret-aware logging:** blocked-attempt logs are local, bounded, and redact common credential-bearing command fragments.
 
 > **Security:** pi packages run with your full system permissions. ProtectMe is a guardrail for supported Pi command flows, not a sandbox, firewall, or proxy. Read [`SECURITY.md`](SECURITY.md).
@@ -42,6 +42,7 @@ ProtectMe is a Pi extension for coding agents. It guards supported shell-network
 - [Quick Start](#quick-start)
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [Approval prompt](#approval-prompt)
 - [Commands and Tools](#commands-and-tools)
 - [Troubleshooting](#troubleshooting)
 - [Development and Validation](#development-and-validation)
@@ -103,20 +104,22 @@ pi --no-extensions -e .
 
 ## Configuration
 
-ProtectMe reads JSON config from global and project-local files. It does not require secrets. On runtime load, it creates a missing global config at `~/.pi/agent/protectme.json` with the built-in defaults; project config is still only written when you explicitly confirm a `/protectme` edit or repeated-block prompt.
+ProtectMe reads JSON config from global and project-local files. It does not require secrets. On runtime load, it creates a missing global config at `~/.pi/agent/protectme.json` with the built-in defaults; project config is still only written when you confirm a `/protectme` edit or pick a project choice in the approval prompt.
 
 | Scope | Path | Notes |
 | --- | --- | --- |
 | Global | `~/.pi/agent/protectme.json` | Applies across projects. `PI_CODING_AGENT_DIR` moves this path in standard Pi installations. |
 | Project | `.pi/protectme.json` | Applies only when Pi reports the project as trusted. Inside a linked git worktree, this path resolves to the main worktree, so saved entries outlive the worktree. On save, ProtectMe adds `protectme.json` and `.gitignore` to `.pi/.gitignore` unless git already tracks the config. |
-| Block log | `.pi/agent/protectme_log.jsonl` | Append-only local log for blocked attempts. Allowed requests are not logged. Resolves to the main worktree like project config, and ProtectMe writes a `.gitignore` next to it when none exists. |
+| Session | The file named by `PROTECTME_SESSION_CONFIG` | Optional. Holds the hosts allowed or denied "for session". Without it they are kept in memory until the session ends. |
+| Block log | `.pi/agent/protectme_log.jsonl` | Append-only local log for blocked attempts and for choices made in the approval prompt. Requests to listed hosts are not logged. Resolves to the main worktree like project config, and ProtectMe writes a `.gitignore` next to it when none exists. |
 
 Schema:
 
 ```json
 {
   "mode": "block",
-  "allowList": ["example.com", "api.example2.com"]
+  "allowList": ["example.com", "api.example2.com"],
+  "denyList": ["tracker.example"]
 }
 ```
 
@@ -126,6 +129,7 @@ Fields:
 | --- | --- | --- |
 | `mode` | No | `"block"` blocks disallowed hosts. `"allow"` permits detected requests without prompts or blocked-attempt logs. |
 | `allowList` | No | Host entries allowed in `block` mode. Entries are normalized and deduplicated. |
+| `denyList` | No | Host entries refused in `block` mode, in the same format as `allowList`. A deny entry wins over an allow entry: with `example.com` allowed and `api.example.com` denied, `api.example.com` is refused. A denied host is refused at once, with no prompt. |
 
 A missing global config is initialized automatically with `mode: "block"` and this built-in starter allow list:
 
@@ -150,9 +154,10 @@ Resolution order:
 - Built-in starter entries load first.
 - Global config appends additional `allowList` entries.
 - Trusted project config appends additional `allowList` entries.
+- Global and trusted project `denyList` entries are joined. The starter list has none.
 - Trusted project `mode` overrides global `mode` when present.
 - Untrusted project config is ignored without reading project-local contents.
-- Invalid or unreadable loaded config fails closed with `mode: "block"` and an empty effective allow list.
+- Invalid or unreadable loaded config fails closed with `mode: "block"` and an empty effective allow list. Deny entries of the config that is still valid keep applying.
 
 Host matching rules:
 
@@ -163,11 +168,51 @@ Host matching rules:
 - `localhost`, IPv4, and IPv6 entries match exactly, including ports such as `localhost:3000`.
 - Local subdomains such as `app.localhost` are not covered by `localhost`; add `app.localhost` or another exact local hostname to your project allow list when needed.
 
+Session file:
+
+- Set the environment variable `PROTECTME_SESSION_CONFIG` to a file path to keep the session lists in a file. A host program sets it to share one list between several Pi sessions.
+- The file has the shape `{ "allowList": ["example.com"], "denyList": ["tracker.example"] }`. ProtectMe creates it on the first "for session" choice and reads it on every request.
+- Session entries apply on top of the config: a session deny wins over every allow, and a config deny wins over a session allow.
+- `PROTECTME_SESSION_READS` is a separate setting for research sessions. `ask` opens the prompt on the first try of a read-only `curl` or `wget` request and adds the row "Allow all read-only requests for this session". `open` lets read-only requests through unasked.
+
 Blocked-attempt log retention:
 
-- `.pi/agent/protectme_log.jsonl` is append-only local state for blocked attempts.
+- `.pi/agent/protectme_log.jsonl` is append-only local state for blocked attempts and prompt choices.
 - ProtectMe reads recent entries with a bounded tail window and does not compact, upload, or delete the log.
 - Delete or truncate `.pi/agent/protectme_log.jsonl` if you want to clear local history.
+
+---
+
+## Approval prompt
+
+The first request to an unlisted host is blocked, and the agent is told to repeat it if the host is needed. The repeat opens the prompt. A session without a UI cannot ask, so the request stays blocked.
+
+```text
+ProtectMe blocked a read-only network request.
+Hosts: api.example.org, cdn.example.net
+Saves: example.org (and its subdomains), example.net (and its subdomains)
+```
+
+- The first line says whether the request is read-only or sends data. Read-only means a `curl` or `wget` call with no body, form, upload or method option.
+- `Hosts` lists every unlisted host of the command. One choice applies to all of them.
+- `Saves` is what a saved choice writes for each host: the registrable domain, which covers its subdomains. An IP address or `localhost` is saved as it is.
+
+Choices:
+
+| Choice | Effect |
+| --- | --- |
+| `Allow once` | This call runs. Nothing is saved. |
+| `Allow for session` | The hosts are allowed until the session ends, or in the session file when `PROTECTME_SESSION_CONFIG` is set. |
+| `Allow for project` | Adds the entries to `allowList` in `.pi/protectme.json`. |
+| `Allow globally` | Adds the entries to `allowList` in `~/.pi/agent/protectme.json`. |
+| `Deny once` | This call is blocked. Nothing is saved. Cancelling the prompt does the same. |
+| `Deny for session` | The hosts are refused for the session, with no further prompt. |
+| `Deny for project` | Adds the entries to `denyList` in `.pi/protectme.json`. |
+| `Deny globally` | Adds the entries to `denyList` in `~/.pi/agent/protectme.json`. |
+
+The project choices are missing when the project is not trusted. A choice whose config file is invalid or unreadable is missing too. To save another entry than the suggested one, use `/protectme` or edit the config file.
+
+Other extensions can follow the prompt: ProtectMe emits `herdr:blocked` on `pi.events` with `{ active: true, id, label, guard }` when the prompt opens and `{ active: false, id }` when it closes. `guard` holds the command with secrets redacted, the hosts, the reason, the saved entry and the choice labels.
 
 ---
 
@@ -200,7 +245,7 @@ Suggested workflow:
 1. Start with `/protectme` to inspect mode, trust status, and allow-list counts.
 2. Keep `mode` as `block` and add only the narrow project-specific hosts you need, such as `app.localhost` for local subdomain testing.
 3. Let the agent or direct Pi `!`/`!!` commands run supported request CLIs normally.
-4. Review repeated-block prompts carefully before allowing once or choosing which config file receives a saved allow-list entry.
+4. Read the approval prompt before choosing: check the hosts and the `Saves` line, and prefer the narrowest scope that does the job.
 
 ---
 
@@ -208,7 +253,7 @@ Suggested workflow:
 
 | Problem | Try |
 | --- | --- |
-| Unexpected block | Run `/protectme`, inspect mode and counts, then add the intended host to project config or global config. |
+| Unexpected block | Run `/protectme`, inspect mode and counts, then add the intended host to project config or global config. A block that says "the host is on the deny list" needs the entry removed from `denyList` in the config or the session file. |
 | Config warning | Fix invalid JSON, schema errors, unreadable files, or ignored invalid allow-list entries. |
 | Project config ignored | Trust the project in Pi or use global config. ProtectMe does not read untrusted `.pi/protectme.json`. |
 | Prompt unavailable | Use Pi TUI mode for confirmation prompts, or edit config manually. Repeated attempts fail closed without UI confirmation. |

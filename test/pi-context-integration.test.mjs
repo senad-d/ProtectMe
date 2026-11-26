@@ -6,7 +6,6 @@ import { PROTECTME_COMMAND_NAME } from "../src/constants.ts";
 import {
   createDefaultNetworkGuardDependencies,
   PROTECTME_GUIDANCE_CUSTOM_MESSAGE_TYPE,
-  PROTECTME_SECOND_ATTEMPT_CHOICES,
   registerNetworkGuardEvents,
 } from "../src/events/network-guard.ts";
 import { buildBlockedAttemptLogEntry } from "../src/logging/blocked-attempt-log.ts";
@@ -28,7 +27,7 @@ const plainTheme = {
 test("Pi-context lifecycle integration resets status and attempts on reload-like starts", async () => {
   const harness = new ProtectMeIntegrationHarness();
   const state = harness.registerNetwork();
-  const ctx = new FakePiContext({ mode: "tui", hasUI: true, selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.keepBlocked] });
+  const ctx = new FakePiContext({ mode: "tui", hasUI: true, selectChoices: ["Deny once"] });
   const event = { type: "tool_call", toolCallId: "call-1", toolName: "bash", input: { command: "curl https://reload.example.com" } };
 
   await emitSessionStart(harness.pi, ctx, "startup");
@@ -103,7 +102,7 @@ test("Pi command mode contract opens custom UI only in TUI mode", async () => {
 test("Pi-context repeated attempt integration uses RPC UI dialogs without user-message guidance", async () => {
   const harness = new ProtectMeIntegrationHarness();
   harness.registerNetwork();
-  const ctx = new FakePiContext({ mode: "rpc", hasUI: true, selectChoices: [PROTECTME_SECOND_ATTEMPT_CHOICES.allowOnce] });
+  const ctx = new FakePiContext({ mode: "rpc", hasUI: true, selectChoices: ["Allow once"] });
   const event = { type: "tool_call", toolCallId: "call-1", toolName: "bash", input: { command: "curl https://rpc.example.com" } };
 
   const firstResult = await emitToolCall(harness.pi, event, ctx);
@@ -113,8 +112,7 @@ test("Pi-context repeated attempt integration uses RPC UI dialogs without user-m
   assert.equal(secondResult, undefined);
   assert.equal(ctx.ui.selectCalls.length, 1);
   assert.match(ctx.ui.selectCalls[0].title, /rpc\.example\.com/u);
-  assert.equal(harness.loggedAttempts.length, 1);
-  assert.equal(harness.loggedAttempts[0].outcome, "blocked");
+  assert.deepEqual(harness.loggedAttempts.map((attempt) => attempt.outcome), ["blocked", "prompt_allowed_once"]);
   assert.equal(harness.pi.messages.length, 1);
   assert.equal(harness.pi.userMessages.length, 0);
 });
@@ -165,6 +163,7 @@ class ProtectMeIntegrationHarness {
       mutateProjectConfig: this.mutateProjectConfig.bind(this),
       mutateGlobalConfig: this.mutateGlobalConfig.bind(this),
       sendGuidance: defaultNetworkDependencies.sendGuidance,
+      emitBlocked: defaultNetworkDependencies.emitBlocked,
     };
     this.commandDependencies = {
       getHomeDir: this.getHomeDir.bind(this),

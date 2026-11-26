@@ -26,10 +26,20 @@ const SENSITIVE_EXACT_LOG_KEYS = new Set([
   "token",
   "x-api-key",
 ]);
-export const BLOCKED_ATTEMPT_LOG_OUTCOMES = ["blocked", "prompt_denied", "prompt_error", "prompt_unavailable"] as const;
+export const BLOCKED_ATTEMPT_LOG_OUTCOMES = [
+  "blocked",
+  "denied",
+  "prompt_denied_once",
+  "prompt_denied_session",
+  "prompt_denied_project",
+  "prompt_denied_global",
+  "prompt_error",
+  "prompt_unavailable",
+] as const;
 export const NON_BLOCKED_ATTEMPT_OUTCOMES = [
   "allowed",
   "prompt_allowed_once",
+  "prompt_allowed_session",
   "prompt_allowed_project",
   "prompt_allowed_global",
 ] as const;
@@ -59,7 +69,7 @@ export interface BlockedAttemptLogEntry {
   attempt: number;
   mode: ProtectMeMode;
   configSources: ProtectMeConfigSourceMetadata[];
-  outcome: BlockedAttemptLogOutcome;
+  outcome: ProtectMeRequestAttemptOutcome;
 }
 
 export interface AppendBlockedAttemptLogInput {
@@ -73,13 +83,9 @@ export interface AppendBlockedAttemptLogInput {
   attempt: number;
   mode: ProtectMeMode;
   configSources: ProtectMeConfigSourceMetadata[];
-  outcome: BlockedAttemptLogOutcome;
+  outcome: ProtectMeRequestAttemptOutcome;
   timestamp?: string;
   commandSnippetMaxLength?: number;
-}
-
-export interface AppendRequestAttemptLogInput extends Omit<AppendBlockedAttemptLogInput, "outcome"> {
-  outcome: ProtectMeRequestAttemptOutcome;
 }
 
 export interface RequestAttemptLogResult {
@@ -146,17 +152,18 @@ async function ensureBlockedAttemptLogGitIgnore(logPath: string): Promise<void> 
   }
 }
 
+// Logs every outcome but "allowed": a request to a listed host leaves no line, an allow from the prompt does.
 export async function appendProtectMeRequestAttemptLog(
-  input: AppendRequestAttemptLogInput,
+  input: AppendBlockedAttemptLogInput,
 ): Promise<RequestAttemptLogResult> {
-  if (!isBlockedAttemptLogOutcome(input.outcome)) {
+  if (input.outcome === "allowed") {
     return {
       logged: false,
       entry: null,
     };
   }
 
-  const entry = await appendBlockedAttemptLog({ ...input, outcome: input.outcome });
+  const entry = await appendBlockedAttemptLog(input);
 
   return {
     logged: true,
@@ -209,10 +216,6 @@ export function extractRecentBlockedHosts(
   }
 
   return hosts;
-}
-
-export function isBlockedAttemptLogOutcome(outcome: ProtectMeRequestAttemptOutcome): outcome is BlockedAttemptLogOutcome {
-  return BLOCKED_ATTEMPT_LOG_OUTCOMES.includes(outcome as BlockedAttemptLogOutcome);
 }
 
 export function redactSensitiveCommandFragments(command: string): string {
@@ -306,6 +309,8 @@ function readHostFromLogLine(line: string): string | null {
   try {
     const value = JSON.parse(line) as unknown;
     if (!isRecord(value) || typeof value.host !== "string") return null;
+    // A request the user allowed in the prompt is logged too, and is not a blocked host.
+    if ((NON_BLOCKED_ATTEMPT_OUTCOMES as readonly unknown[]).includes(value.outcome)) return null;
 
     return sanitizeLogCellText(value.host);
   } catch {

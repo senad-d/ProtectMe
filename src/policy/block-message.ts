@@ -9,6 +9,10 @@ export function buildProtectMeBlockReason(host: string, promptAvailable: boolean
   return `${prefix} This session has no UI to ask the user, so repeating the request will not help. Continue with local or already allowed work, or ask the user to add the host to the allow list.`;
 }
 
+export function buildProtectMeDeniedBlockReason(host: string): string {
+  return `${EXTENSION_DISPLAY_NAME} denied network request to ${host}: the host is on the deny list. Do not retry it; continue with local or already allowed work.`;
+}
+
 export function buildProtectMeFirstBlockGuidance(host: string, promptAvailable: boolean): string {
   if (promptAvailable) {
     return `${EXTENSION_DISPLAY_NAME} blocked ${host}. If network access to it is required, repeat the same request once so ${EXTENSION_DISPLAY_NAME} can ask the user. Otherwise continue with local or already allowed work.`;

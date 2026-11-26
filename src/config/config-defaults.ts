@@ -23,6 +23,7 @@ export function createDefaultEffectiveProtectMeConfig(
   return {
     mode: DEFAULT_PROTECTME_MODE,
     allowList: [...DEFAULT_PROTECTME_ALLOW_LIST],
+    denyList: [],
     modeSource: "default",
     allowListSources: [],
     configSources,

@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export {
   appendProtectMeConfigAllowListEntry,
+  appendProtectMeConfigListEntry,
   buildProtectMeConfigEditSourceError,
   planProtectMeConfigAllowListAppend,
   readProtectMeConfigSourceAllowListEntries,

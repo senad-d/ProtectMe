@@ -3,12 +3,13 @@ import { homedir } from "node:os";
 import { getAgentDir as getPiAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import {
-  appendProtectMeConfigAllowListEntry,
+  appendProtectMeConfigListEntry,
   buildProtectMeConfigEditSourceError,
   loadProtectMeConfigWithGlobalDefault,
-  normalizeConfigAllowListEntry,
   mutateGlobalProtectMeConfig,
   mutateProjectProtectMeConfig,
+  mutateProtectMeConfigFile,
+  readProtectMeConfigSource,
   selectProtectMeConfigEditSource,
   type ParsedProtectMeConfig,
   type ProtectMeConfigFile,
@@ -23,11 +24,12 @@ import {
   redactSensitiveLogValue,
   type AppendBlockedAttemptLogInput,
   type BlockedAttemptLogEntry,
-  type BlockedAttemptLogOutcome,
+  type ProtectMeRequestAttemptOutcome,
 } from "../logging/blocked-attempt-log.ts";
 import {
   buildProtectMeBlockReason,
   buildProtectMeConfigWriteFailedBlockReason,
+  buildProtectMeDeniedBlockReason,
   buildProtectMeFirstBlockGuidance,
   buildProtectMePromptDeniedBlockReason,
   buildProtectMePromptErrorBlockReason,
@@ -53,28 +55,21 @@ export {
   syncProtectMeSessionStatusFromContext,
 } from "./protectme-session-status.ts";
 
-export const PROTECTME_SECOND_ATTEMPT_CHOICES = {
-  allowOnce: "Allow once",
-  editConfig: "Edit allow-list entry and choose config before saving",
-  keepBlocked: "Keep blocked",
-} as const;
-
 // Session reads (PROTECTME_SESSION_READS): a host that runs research sets it for that
-// session. "ask" prompts on the first try of a read-only request and adds these choices;
+// session. "ask" prompts on the first try of a read-only request and adds one choice;
 // "open" lets read-only requests through unasked. A request that sends data keeps the normal flow.
 export const PROTECTME_SESSION_READS_ENV = "PROTECTME_SESSION_READS";
-export const PROTECTME_SESSION_READS_CHOICE = "Allow reads from the listed hosts for this session";
 export const PROTECTME_SESSION_READS_ALL_CHOICE = "Allow all read-only requests for this session";
+// Names a JSON file ({ allowList, denyList }) that holds the session lists, so several sessions can share them.
+export const PROTECTME_SESSION_CONFIG_ENV = "PROTECTME_SESSION_CONFIG";
+export const PROTECTME_BLOCKED_EVENT = "herdr:blocked";
 
-export const PROTECTME_CONFIG_CONFIRM_CHOICES = {
-  saveProjectAndAllow: "Save to project config and allow this call",
-  saveGlobalAndAllow: "Save to global config and allow this call",
-  cancel: "Cancel without saving",
-} as const;
+const PROMPT_SCOPE_LABELS = { once: "once", session: "for session", project: "for project", global: "globally" } as const;
+const BLOCKED_EVENT_COMMAND_MAX_LENGTH = 4000;
+let blockedPromptCounter = 0;
 
 export const PROTECTME_GUIDANCE_CUSTOM_MESSAGE_TYPE = "protectme-guidance";
 
-const PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES = Object.values(PROTECTME_SECOND_ATTEMPT_CHOICES);
 const PROTECTME_USER_BASH_LOG_TOOL_NAME = "user_bash";
 const PROTECTME_PROMPT_ERROR_NOTIFICATION = [
   "ProtectMe blocked this repeated network request because the confirmation prompt failed.",
@@ -83,8 +78,8 @@ const PROTECTME_PROMPT_ERROR_NOTIFICATION = [
 
 export interface NetworkGuardState {
   blockedHostAttempts: Map<string, number>;
-  // Hosts the user allowed read-only requests to for this session (session reads "ask").
-  sessionReadHosts: Set<string>;
+  // Session allow and deny lists, used when PROTECTME_SESSION_CONFIG names no file.
+  session: ProtectMeConfigFile;
   // The user allowed every read-only request for this session (session reads "ask").
   sessionReadsAll: boolean;
 }
@@ -107,6 +102,8 @@ export interface NetworkGuardDependencies {
     mutation: ProtectMeConfigMutation,
   ): Promise<ProtectMeConfigFile>;
   sendGuidance(message: string, options?: NetworkGuardGuidanceOptions): void;
+  // Tells other extensions that the approval prompt opened or closed (herdr:blocked).
+  emitBlocked(event: unknown): void;
   // The session-reads mode; defaults to the PROTECTME_SESSION_READS environment variable.
   getSessionReads?(): string | undefined;
 }
@@ -136,7 +133,6 @@ interface UserBashEventLike {
 
 interface NetworkGuardPromptUI {
   select(title: string, options: string[]): Promise<string | undefined>;
-  editor(title: string, prefill?: string): Promise<string | undefined>;
   notify?(message: string, type?: "info" | "warning" | "error"): void;
 }
 
@@ -147,37 +143,60 @@ interface NetworkGuardContextLike {
   isProjectTrusted?: () => boolean;
 }
 
+type PromptScope = keyof typeof PROMPT_SCOPE_LABELS;
+type SessionReadsMode = "ask" | "open" | undefined;
+
 interface DisallowedRequest {
+  // The first unlisted request: it decides between the first block and the prompt.
   candidate: BashNetworkRequestCandidate;
+  // Every unlisted request of the command.
+  candidates: BashNetworkRequestCandidate[];
   attempt: number;
+  readOnly: boolean;
+  // Session reads "ask" and only read-only requests: ask on the first try and offer the all-reads choice.
+  askReads: boolean;
 }
 
-interface AllowDecision {
+interface PromptChoice {
+  label: string;
+  list: "allowList" | "denyList";
+  scope: PromptScope;
+}
+
+interface SavedEntry {
+  entry: string;
+  subdomains: boolean;
+}
+
+interface DecisionLog {
+  outcome: ProtectMeRequestAttemptOutcome;
+  // One log line each.
+  candidates: BashNetworkRequestCandidate[];
+}
+
+interface AllowDecision extends DecisionLog {
   action: "allow";
 }
 
-interface BlockDecision {
+interface BlockDecision extends DecisionLog {
   action: "block";
-  outcome: BlockedAttemptLogOutcome;
   reason: string;
   firstAttemptGuidance?: string;
 }
 
 type NetworkGuardDecision = AllowDecision | BlockDecision;
-type ConfigPromptTarget = "project" | "global";
-type SessionReadsMode = "ask" | "open" | undefined;
 
 export function createNetworkGuardState(): NetworkGuardState {
   return {
     blockedHostAttempts: new Map(),
-    sessionReadHosts: new Set(),
+    session: {},
     sessionReadsAll: false,
   };
 }
 
 export function resetNetworkGuardSessionState(state: NetworkGuardState): void {
   state.blockedHostAttempts.clear();
-  state.sessionReadHosts.clear();
+  state.session = {};
   state.sessionReadsAll = false;
 }
 
@@ -187,29 +206,33 @@ function sessionReadsMode(dependencies: NetworkGuardDependencies): SessionReadsM
   return value === "ask" || value === "open" ? value : undefined;
 }
 
-// A read-only request the session already covers: every host in "open" mode, the hosts (or all hosts) the user allowed in "ask" mode.
+// A read-only request the session already covers: every one in "open" mode, or in "ask" mode once the user allowed all of them.
 function isSessionRead(candidate: BashNetworkRequestCandidate, state: NetworkGuardState, mode: SessionReadsMode): boolean {
   if (mode === undefined || !isReadOnlyRequest(candidate)) return false;
 
-  return mode === "open" || state.sessionReadsAll || state.sessionReadHosts.has(candidate.host);
+  return mode === "open" || state.sessionReadsAll;
 }
 
-// The command's read-only requests to hosts neither listed nor allowed for the session: what the "ask" prompt offers to allow together.
-function pendingSessionReadHosts(
-  candidates: BashNetworkRequestCandidate[],
-  config: ProtectMeConfigLoadResult,
-  state: NetworkGuardState,
-  mode: SessionReadsMode,
-): string[] {
-  if (mode !== "ask") return [];
+// Read on every call: another session that shares the file may have saved an entry since.
+async function loadSessionLists(state: NetworkGuardState): Promise<ProtectMeConfigFile> {
+  const path = process.env[PROTECTME_SESSION_CONFIG_ENV];
+  if (!path) return state.session;
 
-  const hosts = candidates
-    .filter((candidate) => isReadOnlyRequest(candidate))
-    .filter((candidate) => !matchAllowedHost(candidate.host, config.effective.allowList).allowed)
-    .filter((candidate) => !state.sessionReadHosts.has(candidate.host))
-    .map((candidate) => candidate.host);
+  return (await readProtectMeConfigSource("global", path)).config ?? {};
+}
 
-  return [...new Set(hosts)];
+async function saveSessionEntries(state: NetworkGuardState, list: PromptChoice["list"], entries: string[]): Promise<void> {
+  const path = process.env[PROTECTME_SESSION_CONFIG_ENV];
+  if (path) {
+    await mutateProtectMeConfigFile("global", path, (current) => appendConfigListEntries(current, list, entries));
+    return;
+  }
+
+  state.session = appendConfigListEntries(state.session, list, entries);
+}
+
+function appendConfigListEntries(config: ProtectMeConfigFile, list: PromptChoice["list"], entries: string[]): ProtectMeConfigFile {
+  return entries.reduce((next, entry) => appendProtectMeConfigListEntry(next, list, entry), config);
 }
 
 export function createDefaultNetworkGuardDependencies(pi: ExtensionAPI): NetworkGuardDependencies {
@@ -230,6 +253,13 @@ export function createDefaultNetworkGuardDependencies(pi: ExtensionAPI): Network
         },
         { deliverAs: options?.deliverAs ?? "steer" },
       );
+    },
+    emitBlocked(event) {
+      try {
+        pi.events?.emit(PROTECTME_BLOCKED_EVENT, event);
+      } catch {
+        // A failing listener must not change the ProtectMe decision.
+      }
     },
   };
 }
@@ -275,18 +305,8 @@ export async function handleNetworkGuardToolCall(
   const candidates = extractToolCallNetworkRequestCandidates(toolCallEvent.toolName, toolCallEvent.input);
   if (candidates.length === 0) return undefined;
 
-  const config = await dependencies.loadConfig(buildNetworkGuardConfigLoadInput(ctx, dependencies));
-  if (config.effective.mode === "allow") return undefined;
-
-  const sessionReads = sessionReadsMode(dependencies);
-  const disallowedRequest = findFirstDisallowedRequest(candidates, config, state, sessionReads);
-  if (!disallowedRequest) return undefined;
-
-  const readHosts = isReadOnlyRequest(disallowedRequest.candidate) ? pendingSessionReadHosts(candidates, config, state, sessionReads) : [];
-  const decision = await decideDisallowedRequest(ctx, config, disallowedRequest, dependencies, state, readHosts);
-  if (decision.action === "allow") return undefined;
-
-  await logBlockedRequest(toolCallEvent, ctx, config, disallowedRequest, dependencies, decision.outcome);
+  const decision = await guardNetworkRequests(toolCallEvent, candidates, ctx, state, dependencies, sessionReadsMode(dependencies));
+  if (decision?.action !== "block") return undefined;
   if (decision.firstAttemptGuidance) dependencies.sendGuidance(decision.firstAttemptGuidance, { deliverAs: "steer" });
 
   return {
@@ -307,17 +327,9 @@ export async function handleNetworkGuardUserBash(
   const candidates = extractBashNetworkRequestCandidates(userBashEvent.command);
   if (candidates.length === 0) return undefined;
 
-  const config = await dependencies.loadConfig(buildNetworkGuardConfigLoadInput(ctx, dependencies));
-  if (config.effective.mode === "allow") return undefined;
-
   // The user's own bash commands are not the session's research: no session reads here.
-  const disallowedRequest = findFirstDisallowedRequest(candidates, config, state, undefined);
-  if (!disallowedRequest) return undefined;
-
-  const decision = await decideDisallowedRequest(ctx, config, disallowedRequest, dependencies, state, []);
-  if (decision.action === "allow") return undefined;
-
-  await logBlockedRequest(buildUserBashLogEvent(userBashEvent), ctx, config, disallowedRequest, dependencies, decision.outcome);
+  const decision = await guardNetworkRequests(buildUserBashLogEvent(userBashEvent), candidates, ctx, state, dependencies, undefined);
+  if (decision?.action !== "block") return undefined;
 
   return buildUserBashBlockResult(decision.reason);
 }
@@ -370,149 +382,241 @@ function readProjectTrusted(ctx: NetworkGuardContextLike): boolean {
   return ctx.isProjectTrusted();
 }
 
-function findFirstDisallowedRequest(
+// Decides one command's network requests and logs the outcome. Null: every request goes to a listed host, or mode is "allow".
+async function guardNetworkRequests(
+  event: ToolCallEventLike,
   candidates: BashNetworkRequestCandidate[],
-  config: ProtectMeConfigLoadResult,
+  ctx: NetworkGuardContextLike,
   state: NetworkGuardState,
+  dependencies: NetworkGuardDependencies,
   sessionReads: SessionReadsMode,
-): DisallowedRequest | null {
-  for (const candidate of candidates) {
-    if (matchAllowedHost(candidate.host, config.effective.allowList).allowed) continue;
-    if (isSessionRead(candidate, state, sessionReads)) continue;
+): Promise<NetworkGuardDecision | null> {
+  const config = await dependencies.loadConfig(buildNetworkGuardConfigLoadInput(ctx, dependencies));
+  if (config.effective.mode === "allow") return null;
 
-    return {
-      candidate,
-      attempt: incrementBlockedHostAttempt(state, candidate.host),
-    };
+  const decision = await decideNetworkRequests(event, candidates, ctx, config, state, dependencies, sessionReads);
+  if (!decision) return null;
+
+  // Chain writes to the same JSONL file so records stay in candidate order.
+  let logged = Promise.resolve();
+  for (const candidate of decision.candidates) {
+    logged = logged.then(() =>
+      logRequestAttempt(event, ctx, config, candidate, state.blockedHostAttempts.get(candidate.host) ?? 1, dependencies, decision.outcome),
+    );
   }
+  await logged;
 
-  return null;
+  return decision;
 }
 
-async function decideDisallowedRequest(
+async function decideNetworkRequests(
+  event: ToolCallEventLike,
+  candidates: BashNetworkRequestCandidate[],
   ctx: NetworkGuardContextLike,
   config: ProtectMeConfigLoadResult,
-  request: DisallowedRequest,
-  dependencies: NetworkGuardDependencies,
   state: NetworkGuardState,
-  readHosts: readonly string[],
-): Promise<NetworkGuardDecision> {
-  if (request.candidate.unsupportedReason) return buildUnsupportedNetworkOptionBlockDecision(request.candidate);
-  // readHosts is non-empty only for a read-only request in session reads "ask": that one asks on the first try.
-  const askNow = readHosts.length > 0 && hasPromptUI(ctx);
-  if (request.attempt === 1 && !askNow) return buildFirstAttemptBlockDecision(request.candidate.host, hasPromptUI(ctx));
-  if (!hasPromptUI(ctx)) return buildPromptUnavailableDecision(request.candidate.host);
+  dependencies: NetworkGuardDependencies,
+  sessionReads: SessionReadsMode,
+): Promise<NetworkGuardDecision | null> {
+  const session = await loadSessionLists(state);
 
-  return promptForRepeatedBlockedRequest(ctx.ui, config, request, dependencies, state, readHosts);
+  // Deny wins: over the allow lists, and over every other request of the command.
+  const denyList = [...config.effective.denyList, ...(session.denyList ?? [])];
+  const denied = candidates.find((candidate) => matchAllowedHost(candidate.host, denyList).allowed);
+  if (denied) return buildDeniedDecision(denied, state);
+
+  const allowList = [...config.effective.allowList, ...(session.allowList ?? [])];
+  const unlisted = candidates.filter(
+    (candidate) => !matchAllowedHost(candidate.host, allowList).allowed && !isSessionRead(candidate, state, sessionReads),
+  );
+  const first = unlisted[0];
+  if (!first) return null;
+
+  const readOnly = unlisted.every(isReadOnlyRequest);
+  const request: DisallowedRequest = {
+    candidate: first,
+    candidates: unlisted,
+    attempt: incrementBlockedHostAttempt(state, first.host),
+    readOnly,
+    askReads: readOnly && sessionReads === "ask",
+  };
+
+  const unsupported = unlisted.find((candidate) => candidate.unsupportedReason);
+  if (unsupported) return buildUnsupportedNetworkOptionBlockDecision(unsupported);
+  if (request.attempt === 1 && !(request.askReads && hasPromptUI(ctx))) return buildFirstAttemptBlockDecision(first, hasPromptUI(ctx));
+  if (!hasPromptUI(ctx)) return buildPromptUnavailableDecision(first);
+
+  return promptForBlockedRequest(event, ctx.ui, config, request, dependencies, state);
+}
+
+function buildDeniedDecision(candidate: BashNetworkRequestCandidate, state: NetworkGuardState): BlockDecision {
+  incrementBlockedHostAttempt(state, candidate.host);
+
+  return {
+    action: "block",
+    outcome: "denied",
+    candidates: [candidate],
+    reason: buildProtectMeDeniedBlockReason(candidate.host),
+  };
 }
 
 function buildUnsupportedNetworkOptionBlockDecision(candidate: BashNetworkRequestCandidate): BlockDecision {
   return {
     action: "block",
     outcome: "blocked",
+    candidates: [candidate],
     reason: buildProtectMeUnsupportedNetworkOptionBlockReason(candidate.cli, candidate.rawTarget, candidate.unsupportedReason ?? "unknown reason"),
   };
 }
 
-function buildFirstAttemptBlockDecision(host: string, promptAvailable: boolean): BlockDecision {
+function buildFirstAttemptBlockDecision(candidate: BashNetworkRequestCandidate, promptAvailable: boolean): BlockDecision {
   return {
     action: "block",
     outcome: "blocked",
-    reason: buildProtectMeBlockReason(host, promptAvailable),
-    firstAttemptGuidance: buildProtectMeFirstBlockGuidance(host, promptAvailable),
+    candidates: [candidate],
+    reason: buildProtectMeBlockReason(candidate.host, promptAvailable),
+    firstAttemptGuidance: buildProtectMeFirstBlockGuidance(candidate.host, promptAvailable),
   };
 }
 
-function buildPromptUnavailableDecision(host: string): BlockDecision {
+function buildPromptUnavailableDecision(candidate: BashNetworkRequestCandidate): BlockDecision {
   return {
     action: "block",
     outcome: "prompt_unavailable",
-    reason: buildProtectMePromptUnavailableBlockReason(host),
+    candidates: [candidate],
+    reason: buildProtectMePromptUnavailableBlockReason(candidate.host),
   };
 }
 
-async function promptForRepeatedBlockedRequest(
+// One prompt for every unlisted host of the command; the choice applies to all of them.
+async function promptForBlockedRequest(
+  event: ToolCallEventLike,
   ui: NetworkGuardPromptUI,
   config: ProtectMeConfigLoadResult,
   request: DisallowedRequest,
   dependencies: NetworkGuardDependencies,
   state: NetworkGuardState,
-  readHosts: readonly string[],
 ): Promise<NetworkGuardDecision> {
-  let choice: string | undefined;
-  const choices =
-    readHosts.length > 0
-      ? [PROTECTME_SESSION_READS_CHOICE, PROTECTME_SESSION_READS_ALL_CHOICE, ...PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES]
-      : PROTECTME_SECOND_ATTEMPT_CHOICE_VALUES;
+  const candidates = request.candidates.filter((candidate, index, all) => all.findIndex((other) => other.host === candidate.host) === index);
+  const hosts = candidates.map((candidate) => candidate.host).join(", ");
+  const saved = buildSavedEntries(candidates);
+  const scopes = buildPromptScopes(config);
+  const choices = buildPromptChoices(scopes);
+  const options = [...choices.map((choice) => choice.label), ...(request.askReads ? [PROTECTME_SESSION_READS_ALL_CHOICE] : [])];
+  const kind = request.readOnly ? "read-only network request" : "network request that sends data";
+  const id = (blockedPromptCounter += 1);
+  let label: string | undefined;
+
+  dependencies.emitBlocked({
+    active: true,
+    id,
+    label: `ProtectMe approval: ${hosts}`,
+    guard: {
+      name: "protectme",
+      kind: "network",
+      title: "Network request blocked",
+      tool: event.toolName,
+      command: redactSensitiveLogText(extractCommandForLog(event.input)).slice(0, BLOCKED_EVENT_COMMAND_MAX_LENGTH),
+      subject: hosts,
+      reason: `This ${kind} goes to hosts that are not on the allow list: ${hosts}.`,
+      rule: {
+        pattern: saved.map((item) => item.entry).join(", "),
+        covers: saved.map((item) => (item.subdomains ? `${item.entry} and its subdomains` : `${item.entry} only`)).join(", "),
+        exact: false,
+        scopes,
+      },
+      options,
+    },
+  });
 
   try {
-    choice = await ui.select(buildRepeatedAttemptPrompt(config, request, readHosts), choices);
+    label = await ui.select(buildPromptTitle(kind, hosts, saved), options);
   } catch {
     notifyPromptError(ui);
-    return buildPromptErrorDecision(request.candidate.host);
+    return { action: "block", outcome: "prompt_error", candidates, reason: buildProtectMePromptErrorBlockReason(hosts) };
+  } finally {
+    dependencies.emitBlocked({ active: false, id });
   }
 
-  if (choice === PROTECTME_SESSION_READS_CHOICE && readHosts.length > 0) {
-    for (const host of readHosts) state.sessionReadHosts.add(host);
-    return { action: "allow" };
-  }
-  if (choice === PROTECTME_SESSION_READS_ALL_CHOICE && readHosts.length > 0) {
+  if (label === PROTECTME_SESSION_READS_ALL_CHOICE && request.askReads) {
     state.sessionReadsAll = true;
-    return { action: "allow" };
+    return { action: "allow", outcome: "prompt_allowed_session", candidates };
   }
-  if (choice === PROTECTME_SECOND_ATTEMPT_CHOICES.allowOnce) return { action: "allow" };
-  if (choice === PROTECTME_SECOND_ATTEMPT_CHOICES.editConfig) return allowViaConfigWrite(ui, config, request, dependencies);
 
-  return buildPromptDeniedDecision(request.candidate.host);
+  // A cancelled prompt, or a label that is not on the list, is "Deny once".
+  const choice = choices.find((item) => item.label === label) ?? { list: "denyList", scope: "once" };
+
+  try {
+    await saveChoice(choice, saved.map((item) => item.entry), config, state, dependencies);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    notifyPromptUser(ui, `ProtectMe could not save this choice: ${message}`);
+
+    return { action: "block", outcome: "prompt_error", candidates, reason: buildProtectMeConfigWriteFailedBlockReason(hosts, message) };
+  }
+
+  if (choice.list === "allowList") return { action: "allow", outcome: `prompt_allowed_${choice.scope}`, candidates };
+
+  return { action: "block", outcome: `prompt_denied_${choice.scope}`, candidates, reason: buildProtectMePromptDeniedBlockReason(hosts) };
 }
 
-async function allowViaConfigWrite(
-  ui: NetworkGuardPromptUI,
+// What a saved choice writes per host: the registrable domain, or the exact host when there is none (an IP address, localhost).
+function buildSavedEntries(candidates: BashNetworkRequestCandidate[]): SavedEntry[] {
+  const saved: SavedEntry[] = [];
+
+  for (const candidate of candidates) {
+    const suggestion = suggestCleanAllowListEntry(candidate.rawTarget);
+    const entry = suggestion.suggestedEntry ?? candidate.host;
+    if (!saved.some((item) => item.entry === entry)) saved.push({ entry, subdomains: suggestion.source === "registrable_domain" });
+  }
+
+  return saved;
+}
+
+// Project and global are offered only when that config can be written: not for an untrusted project, not for a broken file.
+function buildPromptScopes(config: ProtectMeConfigLoadResult): PromptScope[] {
+  const scopes: PromptScope[] = ["once", "session"];
+  if (buildProtectMeConfigEditSourceError(selectProtectMeConfigEditSource(config, "project")) === null) scopes.push("project");
+  if (buildProtectMeConfigEditSourceError(selectProtectMeConfigEditSource(config, "global")) === null) scopes.push("global");
+
+  return scopes;
+}
+
+function buildPromptChoices(scopes: PromptScope[]): PromptChoice[] {
+  return [
+    ...scopes.map((scope): PromptChoice => ({ label: `Allow ${PROMPT_SCOPE_LABELS[scope]}`, list: "allowList", scope })),
+    ...scopes.map((scope): PromptChoice => ({ label: `Deny ${PROMPT_SCOPE_LABELS[scope]}`, list: "denyList", scope })),
+  ];
+}
+
+function buildPromptTitle(kind: string, hosts: string, saved: SavedEntry[]): string {
+  const savedEntries = saved.map((item) => (item.subdomains ? `${item.entry} (and its subdomains)` : item.entry)).join(", ");
+
+  return [
+    `ProtectMe blocked a ${kind}.`,
+    `Hosts: ${hosts}`,
+    `Saves: ${savedEntries}`,
+  ].join("\n");
+}
+
+async function saveChoice(
+  choice: Pick<PromptChoice, "list" | "scope">,
+  entries: string[],
   config: ProtectMeConfigLoadResult,
-  request: DisallowedRequest,
+  state: NetworkGuardState,
   dependencies: NetworkGuardDependencies,
-): Promise<NetworkGuardDecision> {
-  const unavailableReason = buildNoWritableConfigTargetReason(config);
-  if (unavailableReason) {
-    notifyPromptFailure(ui, unavailableReason);
-    return buildPromptDeniedDecision(request.candidate.host);
+): Promise<void> {
+  if (choice.scope === "once") return;
+  if (choice.scope === "session") {
+    await saveSessionEntries(state, choice.list, entries);
+    return;
+  }
+  if (choice.scope === "project") {
+    await dependencies.mutateProjectConfig(config.paths, (current) => appendConfigListEntries(current, choice.list, entries));
+    return;
   }
 
-  const suggestedEntry = buildSuggestedAllowListEntry(request);
-  let editedEntry: string | undefined;
-
-  try {
-    editedEntry = await ui.editor(buildAllowListEntryEditorTitle(request.candidate.host), suggestedEntry);
-  } catch {
-    notifyPromptError(ui);
-    return buildPromptErrorDecision(request.candidate.host);
-  }
-
-  const writePlan = planEditedAllowListEntry(editedEntry);
-
-  if (!writePlan.ok) {
-    notifyPromptFailure(ui, writePlan.reason);
-    return buildPromptDeniedDecision(request.candidate.host);
-  }
-
-  const target = await confirmConfigWrite(ui, config, request, writePlan.entry);
-  if (target === "error") return buildPromptErrorDecision(request.candidate.host);
-  if (!target) return buildPromptDeniedDecision(request.candidate.host);
-
-  try {
-    await mutateTargetConfig(target, config, writePlan.entry, dependencies);
-  } catch (error) {
-    const message = buildErrorMessage(error);
-    notifyPromptFailure(ui, message);
-
-    return {
-      action: "block",
-      outcome: "prompt_denied",
-      reason: buildProtectMeConfigWriteFailedBlockReason(request.candidate.host, message),
-    };
-  }
-
-  return { action: "allow" };
+  await dependencies.mutateGlobalConfig(config.paths, (current) => appendConfigListEntries(current, choice.list, entries));
 }
 
 function hasPromptUI(ctx: NetworkGuardContextLike): ctx is NetworkGuardContextLike & { ui: NetworkGuardPromptUI } {
@@ -521,127 +625,7 @@ function hasPromptUI(ctx: NetworkGuardContextLike): ctx is NetworkGuardContextLi
 
 function isPromptUI(value: unknown): value is NetworkGuardPromptUI {
   if (!isRecord(value)) return false;
-  if (typeof value.select !== "function") return false;
-  if (typeof value.editor !== "function") return false;
-
-  return true;
-}
-
-function buildRepeatedAttemptPrompt(config: ProtectMeConfigLoadResult, request: DisallowedRequest, readHosts: readonly string[]): string {
-  const suggestedEntry = buildSuggestedAllowListEntry(request);
-
-  return [
-    `ProtectMe blocked ${request.attempt > 1 ? "repeated " : ""}network request to ${request.candidate.host}.`,
-    ...(readHosts.length > 0 ? [`Read-only requests in this command, to hosts not on the allow list: ${readHosts.join(", ")}`] : []),
-    `Attempt: ${request.attempt}`,
-    `Suggested allow-list entry: ${suggestedEntry}`,
-    `Project config: ${formatConfigSourceForPrompt(config.projectConfig)}`,
-    `Global config: ${formatConfigSourceForPrompt(config.globalConfig)}`,
-    "Choose how to handle this request.",
-  ].join("\n");
-}
-
-function formatConfigSourceForPrompt(configSource: ParsedProtectMeConfig): string {
-  if (configSource.status === "valid" || configSource.status === "missing") return configSource.path;
-
-  const detail = configSource.message ? `: ${configSource.message}` : "";
-
-  return `${configSource.path} (${configSource.status}${detail})`;
-}
-
-function buildSuggestedAllowListEntry(request: DisallowedRequest): string {
-  const suggestion = suggestCleanAllowListEntry(request.candidate.rawTarget);
-
-  return suggestion.suggestedEntry ?? request.candidate.host;
-}
-
-function buildNoWritableConfigTargetReason(config: ProtectMeConfigLoadResult): string | null {
-  if (isWritableConfigPromptTarget(config, "project")) return null;
-  if (isWritableConfigPromptTarget(config, "global")) return null;
-
-  return "No writable ProtectMe config target is available.";
-}
-
-function isWritableConfigPromptTarget(config: ProtectMeConfigLoadResult, target: ConfigPromptTarget): boolean {
-  const configSource = selectProtectMeConfigEditSource(config, target);
-
-  return buildProtectMeConfigEditSourceError(configSource) === null;
-}
-
-function planEditedAllowListEntry(
-  editedEntry: string | undefined,
-): { ok: true; entry: string } | { ok: false; reason: string } {
-  if (editedEntry === undefined) return { ok: false, reason: "No allow-list entry was confirmed." };
-
-  const normalizedEntry = normalizeConfigAllowListEntry(editedEntry);
-  if (!normalizedEntry) return { ok: false, reason: `Invalid allow-list entry: ${JSON.stringify(editedEntry)}` };
-
-  return { ok: true, entry: normalizedEntry };
-}
-
-function buildAllowListEntryEditorTitle(host: string): string {
-  return `ProtectMe allow-list entry for ${host}`;
-}
-
-async function confirmConfigWrite(
-  ui: NetworkGuardPromptUI,
-  config: ProtectMeConfigLoadResult,
-  request: DisallowedRequest,
-  entry: string,
-): Promise<ConfigPromptTarget | false | "error"> {
-  try {
-    const choice = await ui.select(buildConfigWriteConfirmationPrompt(config, request, entry), buildConfigWriteConfirmationChoices(config));
-
-    return resolveConfigWriteConfirmationChoice(choice);
-  } catch {
-    notifyPromptError(ui);
-
-    return "error";
-  }
-}
-
-function buildConfigWriteConfirmationPrompt(config: ProtectMeConfigLoadResult, request: DisallowedRequest, entry: string): string {
-  return [
-    `ProtectMe will add ${entry} to the selected config.`,
-    `Blocked request host: ${request.candidate.host}`,
-    `Project config: ${formatConfigSourceForPrompt(config.projectConfig)}`,
-    `Global config: ${formatConfigSourceForPrompt(config.globalConfig)}`,
-    "Choose where to save this entry before allowing the current call.",
-  ].join("\n");
-}
-
-function buildConfigWriteConfirmationChoices(config: ProtectMeConfigLoadResult): string[] {
-  const choices: string[] = [];
-  if (isWritableConfigPromptTarget(config, "project")) choices.push(PROTECTME_CONFIG_CONFIRM_CHOICES.saveProjectAndAllow);
-  if (isWritableConfigPromptTarget(config, "global")) choices.push(PROTECTME_CONFIG_CONFIRM_CHOICES.saveGlobalAndAllow);
-  choices.push(PROTECTME_CONFIG_CONFIRM_CHOICES.cancel);
-
-  return choices;
-}
-
-function resolveConfigWriteConfirmationChoice(choice: string | undefined): ConfigPromptTarget | false {
-  if (choice === PROTECTME_CONFIG_CONFIRM_CHOICES.saveProjectAndAllow) return "project";
-  if (choice === PROTECTME_CONFIG_CONFIRM_CHOICES.saveGlobalAndAllow) return "global";
-
-  return false;
-}
-
-async function mutateTargetConfig(
-  target: ConfigPromptTarget,
-  config: ProtectMeConfigLoadResult,
-  normalizedEntry: string,
-  dependencies: NetworkGuardDependencies,
-): Promise<void> {
-  if (target === "project") {
-    await dependencies.mutateProjectConfig(config.paths, (currentConfig) => appendProtectMeConfigAllowListEntry(currentConfig, normalizedEntry));
-    return;
-  }
-
-  await dependencies.mutateGlobalConfig(config.paths, (currentConfig) => appendProtectMeConfigAllowListEntry(currentConfig, normalizedEntry));
-}
-
-function notifyPromptFailure(ui: NetworkGuardPromptUI, message: string): void {
-  notifyPromptUser(ui, `ProtectMe could not allow this call: ${message}`);
+  return typeof value.select === "function";
 }
 
 function notifyPromptError(ui: NetworkGuardPromptUI): void {
@@ -654,22 +638,6 @@ function notifyPromptUser(ui: NetworkGuardPromptUI, message: string): void {
   } catch {
     // Notification failures must not replace the primary ProtectMe fail-closed decision.
   }
-}
-
-function buildPromptErrorDecision(host: string): BlockDecision {
-  return {
-    action: "block",
-    outcome: "prompt_error",
-    reason: buildProtectMePromptErrorBlockReason(host),
-  };
-}
-
-function buildPromptDeniedDecision(host: string): BlockDecision {
-  return {
-    action: "block",
-    outcome: "prompt_denied",
-    reason: buildProtectMePromptDeniedBlockReason(host),
-  };
 }
 
 function buildUserBashLogEvent(event: UserBashEventLike): ToolCallEventLike {
@@ -690,29 +658,24 @@ function buildUserBashBlockResult(reason: string): UserBashBlockResult {
   };
 }
 
-function buildErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-
-  return String(error);
-}
-
-async function logBlockedRequest(
+async function logRequestAttempt(
   event: ToolCallEventLike,
   ctx: NetworkGuardContextLike,
   config: ProtectMeConfigLoadResult,
-  request: DisallowedRequest,
+  candidate: BashNetworkRequestCandidate,
+  attempt: number,
   dependencies: NetworkGuardDependencies,
-  outcome: BlockedAttemptLogOutcome,
+  outcome: ProtectMeRequestAttemptOutcome,
 ): Promise<void> {
   await dependencies.appendBlockedAttemptLog({
     logPath: config.paths.blockedAttemptLogPath,
     cwd: ctx.cwd,
     toolName: event.toolName,
     command: redactSensitiveLogText(extractCommandForLog(event.input)),
-    rawUrl: redactSensitiveLogValue(request.candidate.rawTarget),
-    normalizedUrl: redactSensitiveLogValue(request.candidate.rawTarget),
-    host: request.candidate.host,
-    attempt: request.attempt,
+    rawUrl: redactSensitiveLogValue(candidate.rawTarget),
+    normalizedUrl: redactSensitiveLogValue(candidate.rawTarget),
+    host: candidate.host,
+    attempt,
     mode: config.effective.mode,
     configSources: config.effective.configSources.map(toConfigSourceMetadata),
     outcome,

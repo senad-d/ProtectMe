@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   appendProtectMeConfigAllowListEntry,
+  appendProtectMeConfigListEntry,
   buildProtectMeConfigEditSourceError,
   planProtectMeConfigAllowListAppend,
   readProtectMeConfigSourceAllowListEntries,
@@ -58,6 +59,16 @@ test("config edit mutations preserve mode while appending, removing, and togglin
     mode: "allow",
     allowList: ["Example.com", "keep.example.com"],
   });
+});
+
+test("config edit mutations keep the deny list, and a deny entry is appended once", () => {
+  const config = { mode: "block", allowList: ["keep.example.com"], denyList: ["Ads.example"] };
+
+  assert.deepEqual(setProtectMeConfigMode(config, "allow").denyList, ["Ads.example"]);
+  assert.deepEqual(appendProtectMeConfigAllowListEntry(config, "new.example.com").denyList, ["Ads.example"]);
+  assert.deepEqual(removeProtectMeConfigAllowListEntry(config, "keep.example.com"), { mode: "block", allowList: [], denyList: ["Ads.example"] });
+  assert.deepEqual(appendProtectMeConfigListEntry(config, "denyList", "ads.example"), config);
+  assert.deepEqual(appendProtectMeConfigListEntry(config, "denyList", "https://Tracker.example/x").denyList, ["Ads.example", "tracker.example"]);
 });
 
 test("config edit helpers expose normalized entries for selection lists", () => {
