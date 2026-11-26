@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 - 2026-11-26
+
+- The prompt lists the deny choices first: `Deny once`, `Deny for session`, `Deny for project`, `Deny globally`, then the four allow choices. The list's cursor starts on its first row, so a stray Enter no longer approves a request. The labels are unchanged.
+
 ## 0.2.0 - 2026-11-26
 
 The approval prompt. One list replaces the three steps of the old prompt, and a choice can be saved for the session, the project or everywhere.

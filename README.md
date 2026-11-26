@@ -210,7 +210,7 @@ Choices:
 | `Deny for project` | Adds the entries to `denyList` in `.pi/protectme.json`. |
 | `Deny globally` | Adds the entries to `denyList` in `~/.pi/agent/protectme.json`. |
 
-The project choices are missing when the project is not trusted. A choice whose config file is invalid or unreadable is missing too. To save another entry than the suggested one, use `/protectme` or edit the config file.
+The list shows the four deny choices first, so the cursor starts on `Deny once`. The project choices are missing when the project is not trusted. A choice whose config file is invalid or unreadable is missing too. To save another entry than the suggested one, use `/protectme` or edit the config file.
 
 Other extensions can follow the prompt: ProtectMe emits `herdr:blocked` on `pi.events` with `{ active: true, id, label, guard }` when the prompt opens and `{ active: false, id }` when it closes. `guard` holds the command with secrets redacted, the hosts, the reason, the saved entry and the choice labels.
 

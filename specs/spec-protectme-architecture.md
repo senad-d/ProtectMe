@@ -147,7 +147,7 @@ A host on a deny list (config `denyList`, or denied for the session) is refused 
 Prompt (one `ctx.ui.select`, since 0.2.0):
 - The title says whether the request is read-only or sends data, lists every unlisted host of the command, and shows what a saved choice writes (`Saves: example.org (and its subdomains)`). It shows no config paths.
 - The choice applies to every listed host. The saved entry per host is its registrable domain.
-- Choices, in this order: `Allow once`, `Allow for session`, `Allow for project`, `Allow globally`, `Deny once`, `Deny for session`, `Deny for project`, `Deny globally`.
+- Choices, in this order: `Deny once`, `Deny for session`, `Deny for project`, `Deny globally`, `Allow once`, `Allow for session`, `Allow for project`, `Allow globally`.
 - The project choices are left out when the project config cannot be written (untrusted project, invalid file). The global choices are left out when the global config is invalid or unreadable.
 - A cancelled prompt is `Deny once`.
 - Session choices are kept in memory, or in the JSON file named by `PROTECTME_SESSION_CONFIG` (`{ allowList, denyList }`, created on first save, read on every request).

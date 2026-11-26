@@ -26,16 +26,16 @@ const cwd = "/workspace/project";
 const homeDir = "/home/user";
 const agentDir = `${homeDir}/.pi/agent`;
 const starterStatusText = "🌐";
-const untrustedChoices = ["Allow once", "Allow for session", "Allow globally", "Deny once", "Deny for session", "Deny globally"];
+const untrustedChoices = ["Deny once", "Deny for session", "Deny globally", "Allow once", "Allow for session", "Allow globally"];
 const allChoices = [
-  "Allow once",
-  "Allow for session",
-  "Allow for project",
-  "Allow globally",
   "Deny once",
   "Deny for session",
   "Deny for project",
   "Deny globally",
+  "Allow once",
+  "Allow for session",
+  "Allow for project",
+  "Allow globally",
 ];
 const promptErrorNotification = [
   "ProtectMe blocked this repeated network request because the confirmation prompt failed.",

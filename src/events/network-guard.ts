@@ -582,10 +582,11 @@ function buildPromptScopes(config: ProtectMeConfigLoadResult): PromptScope[] {
   return scopes;
 }
 
+// Deny first: the list's cursor starts on its first row, and a stray Enter must not approve a request.
 function buildPromptChoices(scopes: PromptScope[]): PromptChoice[] {
   return [
-    ...scopes.map((scope): PromptChoice => ({ label: `Allow ${PROMPT_SCOPE_LABELS[scope]}`, list: "allowList", scope })),
     ...scopes.map((scope): PromptChoice => ({ label: `Deny ${PROMPT_SCOPE_LABELS[scope]}`, list: "denyList", scope })),
+    ...scopes.map((scope): PromptChoice => ({ label: `Allow ${PROMPT_SCOPE_LABELS[scope]}`, list: "allowList", scope })),
   ];
 }
 
